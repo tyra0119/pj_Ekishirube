@@ -240,6 +240,14 @@ footer a { color: inherit; }
 .il-line { stroke: var(--sel); stroke-width: 2; stroke-dasharray: 5 5; }
 .il-zone-in { fill: var(--sel-soft); }
 .il-ic { fill: var(--sel); }
+.il-p { fill: none; stroke: var(--ink); stroke-width: 2.6; stroke-linecap: round; stroke-linejoin: round; paint-order: stroke; }
+.il-p-head { fill: var(--ink); }
+.il-p-card { fill: var(--sel); }
+.il-walker { filter: drop-shadow(0 0 2px var(--surface)); }
+@media (prefers-reduced-motion: no-preference) {
+  .il-walker { animation: walk-through 2.6s ease-in-out infinite; }
+  @keyframes walk-through { 0% { transform: translateX(-120px); opacity: 0; } 15% { opacity: 1; } 85% { opacity: 1; } 100% { transform: translateX(110px); opacity: 0; } }
+}
 .il-flap { fill: none; stroke: var(--oedo); stroke-width: 4; stroke-linecap: round; }
 
 @media (max-width: 960px) {
@@ -362,10 +370,10 @@ var Guide = (function () {
   function levelName(st, z) {
     var m = stationMeta(st);
     if (Math.abs(z) < 0.01) return '地上';
-    if (z > 0) return '地上より上';
+    if (z > 0) return Math.abs(z - Math.round(z)) > 0.01 ? '地上と2階のあいだ' : '地上' + (Math.round(z) + 1) + '階'; // 地上（0）を 1 階として数える
     if (m.platLevels[z]) return 'ホーム';
     if (m.gateLevels[z]) return '改札のある階';
-    if (Math.abs(z - Math.round(z)) > 0.01) return '中間の踊り場';
+    if (Math.abs(z - Math.round(z)) > 0.01) return '中間の階';
     return '地下' + (-z) + '層目';
   }
 
@@ -482,7 +490,7 @@ var Guide = (function () {
         if (L > 0.8 && prevDir) {
           var cos = (dx * prevDir[0] + dy * prevDir[1]) / L;
           var rest = s.edges.slice(s.edges.indexOf(e)).reduce(function (t, x) { return t + x.len; }, 0);
-          if (cos < -0.707 && run >= 6 && rest >= 6) { // 折り返し。前後とも 6 m 以上あるときだけ分ける
+          if (cos < -0.707 && run >= 4 && rest >= 4) { // 折り返し。前後とも 4 m 以上あるときだけ分ける
             split.push(cur);
             cur = { kind: 'walk', edges: [], steps: 0, uturn: true };
             run = 0;
@@ -501,10 +509,16 @@ var Guide = (function () {
       s.z0 = st.nodes[s.from][2]; s.z1 = st.nodes[s.to][2];
       s.len = s.edges.reduce(function (t, e) { return t + e.len; }, 0);
     });
-    // 数メートルの歩行は単独の手順にしない
-    return segs.filter(function (s, k) {
-      return !(s.kind === 'walk' && s.len < 6 && s.steps === 0 && k > 0 && k < segs.length - 1);
-    });
+    // 数メートルの歩行は単独の手順にしない。ただし道のりは次の手順（無ければ前の手順）の帯に含め、途切れないようにする
+    var out = [];
+    for (var k = 0; k < segs.length; k++) {
+      var s = segs[k];
+      var short = s.kind === 'walk' && s.len < 6 && s.steps === 0 && k > 0 && k < segs.length - 1 && !s.uturn;
+      if (!short) { out.push(s); continue; }
+      var nx = segs[k + 1];
+      nx.lead = (s.lead || []).concat(s.edges, nx.lead || []); // 次の手順の帯の前に足す（向き・高さの判定には使わない）
+    }
+    return out;
   }
 
   function secs(s) {
@@ -540,7 +554,8 @@ var Guide = (function () {
       if (s.kind === 'walk') {
         var m = Math.max(5, Math.round(s.len / 5) * 5);
         var onPlat = stationMeta(st).platLevels[s.z0];
-        var t = (s.uturn ? '折り返して、' : '') + (onPlat ? 'ホーム上を' : '通路を') + '約' + m + 'm 進む';
+        var again = s.uturn && steps.length && steps[steps.length - 1].icon === 'uturn';
+        var t = (s.uturn ? (again ? 'さらに折り返して、' : '折り返して、') : '') + (onPlat ? 'ホーム上を' : '通路を') + '約' + m + 'm 進む';
         var d = s.steps ? '途中に数段の段差があります。' : '';
         steps.push({ kind: 'walk', icon: s.uturn ? 'uturn' : 'walk', title: t, detail: d, z: s.z0, len: s.len });
       } else if (s.kind === 'gate') {
@@ -551,8 +566,11 @@ var Guide = (function () {
       } else {
         counts[s.mode]++;
         var up = s.z1 > s.z0, word = MODE_WORD[s.mode];
-        var title, detail = levelName(st, s.z0) + ' → ' + levelName(st, s.z1);
-        if (s.mode === EV) title = 'エレベーターで' + levelName(st, s.z1) + 'へ';
+        // 説明の行では、中間の階がどの階のあいだかも書く
+        var longName = function (z) { return Math.abs(z - Math.round(z)) > 0.01 ? '中間の階（' + levelName(st, Math.ceil(z)) + 'と' + levelName(st, Math.floor(z)) + 'のあいだ）' : levelName(st, z); };
+        var title, detail = longName(s.z0) + ' → ' + longName(s.z1);
+        if (s.mode === EV && Math.abs(s.z1 - s.z0) < 0.01) { title = 'エレベーターで移動する'; detail = levelName(st, s.z0) + 'の別の場所へ（データ上は同じ階どうし）'; }
+        else if (s.mode === EV) title = 'エレベーターで' + levelName(st, s.z1) + 'へ';
         else title = (up ? '上り' : '下り') + word + 'で' + levelName(st, s.z1) + 'へ';
         var step = { kind: 'vert', icon: s.mode === EV ? 'ev' : s.mode === ESC ? 'esc' : 'stair', up: up,
           title: title, detail: detail, z: s.z0, z1: s.z1, mode: s.mode };
@@ -825,6 +843,25 @@ var View3D = (function () {
 
 
 
+  // 人のマーク（緑の丸に白い人。画面上で一定の大きさ）
+  function personSprite(color, px) {
+    var c = document.createElement('canvas'); c.width = 128; c.height = 128;
+    var x = c.getContext('2d');
+    x.fillStyle = '#ffffff'; x.beginPath(); x.arc(64, 64, 62, 0, Math.PI * 2); x.fill();
+    x.fillStyle = color; x.beginPath(); x.arc(64, 64, 54, 0, Math.PI * 2); x.fill();
+    x.save(); x.translate(22, 16); x.scale(3.7, 3.7);
+    x.strokeStyle = '#ffffff'; x.fillStyle = '#ffffff'; x.lineWidth = 2.6; x.lineCap = 'round'; x.lineJoin = 'round';
+    x.beginPath(); x.arc(14, 3.4, 2.8, 0, Math.PI * 2); x.fill();
+    x.beginPath(); x.moveTo(13, 7.5); x.lineTo(11, 15); x.moveTo(12.6, 9); x.lineTo(17, 11.6); x.moveTo(12.6, 9); x.lineTo(8.4, 12.6);
+    x.moveTo(11, 15); x.lineTo(15.2, 22); x.moveTo(11, 15); x.lineTo(7.4, 21.6); x.stroke();
+    x.restore();
+    var tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter;
+    var s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
+    var hh = px / ((el && el.clientHeight) || 440) * 2 * Math.tan(THREE.MathUtils.degToRad(19));
+    s.scale.set(hh, hh, 1); s.center.set(0.5, 0.15); s.renderOrder = 13;
+    return s;
+  }
+
   function polyCurve(pts) {
     var path = new THREE.CurvePath();
     for (var i = 1; i < pts.length; i++) path.add(new THREE.LineCurve3(pts[i - 1], pts[i]));
@@ -1009,13 +1046,19 @@ var View3D = (function () {
     // 青は左の一覧・横から見た図の選択と同じ色。路線のマゼンタ・出入口の黄色と混ざらない
     var HL = css('--sel');
     g.segs.forEach(function (s, k) {
-      var sp = dedupe([V(st, s.from, 0.8)].concat(s.edges.map(function (e) { return V(st, e.b, 0.8); })));
+      // 手順から省いた短い通路（s.lead）も帯に含め、前の手順の帯とつなげる
+      var all = (s.lead || []).concat(s.edges);
+      var sp = dedupe([V(st, all[0].a, 0.8)].concat(all.map(function (e) { return V(st, e.b, 0.8); })));
       if (sp.length < 2) return;
       var curve = polyCurve(sp), n = Math.min(800, sp.length * 12);
       var grp = new THREE.Group();
       // 改札は、実際の自動改札機の「通れる」表示と同じ緑。ほかは選んだ手順の青
       var rb = ribbonAlong(sp, s.kind === 'gate' ? css('--gate') : HL);
       grp.add(rb); grp.userData.ribbon = rb;
+      if (s.kind === 'gate') { // 改札を通り抜ける人
+        var wk = personSprite(css('--gate'), 46);
+        grp.add(wk); grp.userData.walker = wk; grp.userData.walkCurve = polyCurve(sp);
+      }
       Object.keys(rb.userData.extras).forEach(function (key) { grp.add(rb.userData.extras[key]); });
       // 番号と手順の文
       var step = g.steps[k + 1], ctr = new THREE.Box3().setFromPoints(sp).getCenter(new THREE.Vector3());
@@ -1025,7 +1068,7 @@ var View3D = (function () {
         grp.add(lb);
       }
       grp.visible = false; grp.userData.step = k + 1; grp.userData.center = ctr; grp.userData.curve = curve;
-      grp.userData.lo = Math.min(s.z0, s.z1); grp.userData.hi = Math.max(s.z0, s.z1); grp.userData.vert = s.kind === 'vert'; grp.userData.start = sp[0];
+      grp.userData.lo = Math.min(s.z0, s.z1); grp.userData.hi = Math.max(s.z0, s.z1); grp.userData.vert = s.kind === 'vert'; grp.userData.start = V(st, s.from, 0.8); // 波紋は昇降設備の入口に
       grp.userData.size = new THREE.Box3().setFromPoints(sp).getSize(new THREE.Vector3()).length();
       segTubes.push(grp); scene.add(grp);
     });
@@ -1132,7 +1175,7 @@ var View3D = (function () {
     var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
     segTubes.forEach(function (s) { s.visible = s === t; });
     sel = null;
-    if (t) sel = { i: i, lo: t.userData.lo, hi: t.userData.hi, curve: t.userData.curve, ring: t.userData.vert ? t.userData.start : null, ribbon: t.userData.ribbon };
+    if (t) sel = { i: i, lo: t.userData.lo, hi: t.userData.hi, curve: t.userData.curve, ring: t.userData.vert ? t.userData.start : null, ribbon: t.userData.ribbon, walker: t.userData.walker, walkCurve: t.userData.walkCurve };
     else if (i >= 0 && lastArgs && routePts.length) {
       // 出発・到着の手順は、その場所に波紋だけ出す
       var g = lastArgs[1], last = g.steps.length - 1;
@@ -1220,6 +1263,7 @@ var View3D = (function () {
       dot.position.copy(routeCurve.getPointAt(u));
     }
     if (sel && sel.ribbon) updateRibbon(sel.ribbon);
+    if (sel && sel.walker) sel.walker.position.copy(sel.walkCurve.getPointAt(reduce ? 0.5 : (now / 2600) % 1)); // 改札を通り抜ける人
     if (sel && sel.ribbon && !reduce) sel.ribbon.material.map.offset.y = -((now / 1000) * 1.2 % 1); // 「︿」を進む向きへ流す
     if (ripple && ripple.visible) {
       var ph = reduce ? 0.4 : (now / 1500) % 1;
@@ -1671,7 +1715,12 @@ var View3D = (function () {
     var line = '<line class="il-line" x1="' + gx + '" x2="' + gx + '" y1="0" y2="' + H + '"/>'; // 改札の境目
     var flaps = '<path class="il-flap" d="M' + (gx + 10) + ' 58 l10 8 M' + (gx + 10) + ' 84 l10 -8"/>';
     var arrow = '<path class="il-arrow gate" d="M40 71 H' + (W - 70) + ' M' + (W - 88) + ' 57 L' + (W - 70) + ' 71 L' + (W - 88) + ' 85"/>';
-    return '<div class="illust"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(s.title) + '">' + out + line + cab + flaps + arrow +
+    // 人のピクトグラム（IC カードを前に出して歩く）。矢印に沿って改札を通り抜けるように動かす
+    var person = '<g class="il-walker"><g transform="translate(' + (gx - 18) + ' 46) scale(2.1)">' +
+      '<circle cx="14" cy="3.4" r="2.8" class="il-p-head"/>' +
+      '<path class="il-p" d="M13 7.5 L11 15 M12.6 9 L17 11.6 M12.6 9 L8.4 12.6 M11 15 L15.2 22 M11 15 L7.4 21.6"/>' +
+      '<rect x="16.4" y="9.4" width="3.6" height="2.6" rx=".6" class="il-p-card"/></g></g>';
+    return '<div class="illust"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(s.title) + '">' + out + line + cab + flaps + arrow + person +
       '<text class="il-txt" x="14" y="' + (H - 12) + '">' + left + '</text>' +
       '<text class="il-txt" x="' + (W - 14) + '" y="' + (H - 12) + '" text-anchor="end">' + right + '</text>' +
       '<text class="il-sub" x="' + (gx - 30) + '" y="' + (ys[0] - 14 < 8 ? 8 : ys[0] - 14) + '" text-anchor="middle">IC</text>' +
