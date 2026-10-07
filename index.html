@@ -1490,7 +1490,7 @@ var View3D = (function () {
     if (now - lastCull > 120) { lastCull = now; scene.updateMatrixWorld(); cullLabels(); }
     if (nameBox) placeNames();
     if (compass) {
-      var hd = Math.round(-headingDeg());
+      var hd = Math.round(headingDeg()); // 北が画面の上から時計回りに何度の所にあるか
       if (hd !== lastHeading) { lastHeading = hd; compass.firstChild.style.transform = 'rotate(' + hd + 'deg)'; }
     }
     renderer.render(scene, camera);
