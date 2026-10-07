@@ -314,16 +314,18 @@ var Guide = (function () {
     if (mode === STAIR) {
       if (profile === 'ev') return Infinity;
       var c = len / 0.55 + 2;
-      return profile === 'esc' && vertical ? c * 6 + 60 : c;
+      // エスカレーターを使う: 階段は避けるが、エスカレーターが無いときはエレベーターより階段（エレベーターは必要な人のために）
+      return profile === 'esc' && vertical ? c * 2 + 90 : c;
     }
     if (mode === ESC) {
       if (profile === 'ev') return Infinity;
       var c2 = len / 0.6 + 3;
-      return profile === 'stair' && vertical ? c2 * 6 + 60 : c2;
+      // 階段を使う: エスカレーターは避けるが、階段が無いときはエレベーターよりエスカレーター
+      return profile === 'stair' && vertical ? c2 * 2 + 90 : c2;
     }
     if (mode === EV) {
       if (!vertical) return len / 1.0;
-      var base = profile === 'ev' ? 35 : profile === 'std' ? 70 : 160;
+      var base = profile === 'ev' ? 35 : profile === 'std' ? 70 : 400; // 階段・エスカレーターを使う条件では最後の手段
       return base + Math.abs(dz) * 4;
     }
     return len;
