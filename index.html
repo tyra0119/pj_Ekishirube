@@ -71,6 +71,8 @@ body { background: var(--bg); color: var(--ink); font-family: var(--f-body); fon
 .numbering b { font-size: 11px; display: block; text-align: center; }
 .numbering span { font-size: 17px; display: block; text-align: center; margin-top: -2px; }
 .sign h1 { margin: 0; font-size: 22px; font-weight: 900; letter-spacing: .04em; text-wrap: balance; }
+.howto { margin-left: auto; color: var(--sign-ink); font-size: 14px; font-weight: 700; border: 1px solid rgba(255,255,255,.4); border-radius: 999px; padding: 4px 14px; text-decoration: none; white-space: nowrap; }
+.howto:hover { background: rgba(255,255,255,.12); }
 .sign h1 small { display: block; font-size: 12px; font-weight: 500; letter-spacing: .08em; opacity: .75; }
 
 /* 条件の入力 */
@@ -290,6 +292,7 @@ footer a { color: inherit; }
   <div class="wrap">
     <div class="numbering" id="numbering" aria-hidden="true"><div><b>E</b><span>20</span></div></div>
     <h1><small>エキしるべ　都営大江戸線（試作）</small><span id="stname">大門</span></h1>
+    <a class="howto" href="https://tyra0119.github.io/pj_Ekishirube/manual.html" target="_blank" rel="noopener">使い方</a>
   </div>
 </header>
 
@@ -542,6 +545,21 @@ var Guide = (function () {
     return out;
   }
 
+  // 階段の上り口・下り口から 12 m 以内に、同じ階どうしを結ぶ一方通行のエスカレーターが、逆向きにだけあるか
+  function oppositeEscalatorNear(st, s, up) {
+    var ends = [st.nodes[s.from], st.nodes[s.to]], lo = Math.min(s.z0, s.z1), hi = Math.max(s.z0, s.z1), opp = false, same = false;
+    st.links.forEach(function (l) {
+      if (l[2] !== ESC) return;
+      var a = st.nodes[l[0]], b = st.nodes[l[1]];
+      if (Math.min(a[2], b[2]) < lo - 0.01 || Math.max(a[2], b[2]) > hi + 0.01 || Math.abs(a[2] - b[2]) < 0.01) return;
+      var near = [a, b].some(function (p) { return ends.some(function (q) { return Math.abs(p[2] - q[2]) < 0.01 && Math.hypot(p[0] - q[0], p[1] - q[1]) < 12; }); });
+      if (!near) return;
+      if (l[3] === 1) { same = true; return; }
+      if ((b[2] > a[2]) === up) same = true; else opp = true;
+    });
+    return opp && !same;
+  }
+
   function secs(s) {
     if (s.kind === 'walk') return s.len / 1.25;
     if (s.kind === 'gate') return 6;
@@ -595,6 +613,8 @@ var Guide = (function () {
         else title = (up ? '上り' : '下り') + word + 'で' + levelName(st, s.z1) + 'へ';
         var step = { kind: 'vert', icon: s.mode === EV ? 'ev' : s.mode === ESC ? 'esc' : 'stair', up: up,
           title: title, detail: detail, z: s.z0, z1: s.z1, mode: s.mode };
+        // 階段のとなりに逆向き専用のエスカレーターがあるなら、そう書く（並んで見えるのに使わない理由）
+        if (s.mode === STAIR && oppositeEscalatorNear(st, s, up)) step.note = 'となりのエスカレーターは' + (up ? '下り' : '上り') + '専用です。';
         // ホームに接する昇降設備なら、ホーム上の位置を添える
         [s.from, s.to].forEach(function (ni) {
           var p = platOfLevelNode(st, ni);
@@ -1572,6 +1592,7 @@ var View3D = (function () {
         '<div class="no">' + (i + 1) + '</div>' + stepIcon(s) +
         '<div style="min-width:0"><div class="st-title">' + esc(s.title) + '</div>' +
         (s.detail ? '<div class="st-detail">' + esc(s.detail) + '</div>' : '') +
+        (s.note ? '<div class="st-detail">' + esc(s.note) + '</div>' : '') +
         (s.where ? '<span class="where">' + esc(s.where) + '</span>' : '') +
         '</div></li>';
     }).join('') + '</ol>';
@@ -1774,7 +1795,7 @@ var View3D = (function () {
         '<button type="button" class="primary" data-nav="next"' + (i === n - 1 ? ' disabled' : '') + '>' + (i === n - 1 ? '到着' : 'つぎへ ▶') + '</button></div>' +
       '<div class="navkeys">キーボードの ← → でも進めます</div>' +
       '<div class="navmain">' + stepIcon(s) + '<div class="navtx"><b>' + esc(s.title) + '</b>' +
-        (sub ? '<small>' + esc(sub) + '</small>' : '') + (s.where ? '<span class="where">' + esc(s.where) + '</span>' : '') + '</div></div>' +
+        (sub ? '<small>' + esc(sub) + '</small>' : '') + (s.note ? '<small>' + esc(s.note) + '</small>' : '') + (s.where ? '<span class="where">' + esc(s.where) + '</span>' : '') + '</div></div>' +
       illust(s) +
       (next ? '<div class="navnext">つぎに ' + stepIcon(next) + '<span>' + esc(next.title) + '</span></div>' : '') +
       '</section>';

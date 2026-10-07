@@ -1,0 +1,148 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>エキしるべ 使い方</title>
+<meta name="description" content="エキしるべの使い方。駅の出入口からホームまでを、立体図と手順で案内します（都営大江戸線 12 駅）">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zen+Kaku+Gothic+New:wght@400;500;700;900&family=Barlow+Semi+Condensed:wght@600;700&display=swap">
+<style>
+:root {
+  --bg: #eef0f3; --surface: #ffffff; --ink: #15181f; --muted: #596070; --line: #d3d8e0; --faint: #e5e8ed;
+  --oedo: #cf3366; --exit: #f5c400; --sign: #1c2333; --sel: #1f6feb; --sel-soft: #e2ecff; --gate: #12994a;
+  --f-body: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", "Meiryo", sans-serif;
+  --f-num: "Barlow Semi Condensed", "Zen Kaku Gothic New", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #111319; --surface: #1a1d25; --ink: #eceef3; --muted: #a2a9b8; --line: #2f3440; --faint: #232731;
+    --oedo: #ff5d8c; --sign: #0b0e15; --sel: #4d8fff; --sel-soft: #16233d; --gate: #2fc46b; color-scheme: dark; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 16px; line-height: 1.8; }
+.sign { background: var(--sign); color: #fff; }
+.sign .in { max-width: 920px; margin: 0 auto; padding: 16px; display: flex; align-items: center; gap: 14px; }
+.badge { width: 46px; height: 46px; border-radius: 50%; border: 5px solid var(--oedo); background: #fff; color: #15181f;
+  display: grid; place-items: center; font-family: var(--f-num); font-weight: 700; line-height: 1; flex: none; }
+.badge b { display: block; font-size: 11px; text-align: center; } .badge span { display: block; font-size: 15px; }
+.sign h1 { margin: 0; font-size: 24px; font-weight: 900; letter-spacing: .04em; }
+.sign h1 small { display: block; font-size: 12px; font-weight: 500; opacity: .75; letter-spacing: .08em; }
+.sign a { color: #fff; margin-left: auto; font-size: 14px; white-space: nowrap; }
+main { max-width: 920px; margin: 0 auto; padding: 8px 16px 48px; }
+section { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-top: 20px; }
+h2 { font-size: 20px; margin: 0 0 8px; letter-spacing: .03em; display: flex; align-items: center; gap: 10px; text-wrap: balance; }
+h2 .no { font-family: var(--f-num); font-size: 15px; color: #fff; background: var(--sel); border-radius: 999px; width: 28px; height: 28px; display: grid; place-items: center; flex: none; }
+h3 { font-size: 16px; margin: 18px 0 4px; }
+p { margin: 6px 0; } ul, ol { margin: 6px 0; padding-left: 1.4em; } li { margin: 2px 0; }
+figure { margin: 14px 0 6px; }
+figure img { width: 100%; height: auto; border-radius: 8px; border: 1px solid var(--line); display: block; }
+figure.phone { max-width: 300px; }
+figcaption { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.two { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+table { border-collapse: collapse; width: 100%; font-size: 14px; margin: 8px 0; }
+th, td { border-bottom: 1px solid var(--line); padding: 6px 8px; text-align: left; vertical-align: top; }
+th { color: var(--muted); font-weight: 500; white-space: nowrap; }
+.chip { display: inline-block; font-size: 13px; padding: 0 9px; border-radius: 999px; background: var(--faint); white-space: nowrap; }
+.exit { display: inline-block; background: var(--exit); color: #131313; font-family: var(--f-num); font-weight: 700; padding: 0 6px; border-radius: 3px; }
+.sel { color: var(--sel); font-weight: 700; } .gate { color: var(--gate); font-weight: 700; }
+.note { background: var(--sel-soft); border-radius: 8px; padding: 10px 14px; font-size: 14px; margin-top: 10px; }
+.warn { border-left: 4px solid var(--oedo); padding: 6px 12px; background: var(--faint); border-radius: 0 8px 8px 0; font-size: 14px; }
+footer { font-size: 12px; color: var(--muted); margin-top: 24px; }
+a { color: var(--sel); }
+@media (max-width: 680px) { .two { grid-template-columns: minmax(0, 1fr); } section { padding: 16px; } .sign a { display: none; } }
+</style>
+</head>
+<body>
+<header class="sign"><div class="in">
+  <div class="badge" aria-hidden="true"><div><b>E</b><span>20</span></div></div>
+  <h1><small>エキしるべ　都営大江戸線</small>使い方</h1>
+  <a href="./">アプリを開く →</a>
+</div></header>
+
+<main>
+<section>
+  <h2>エキしるべとは</h2>
+  <p>駅の<b>出入口からホームまで</b>（ホームから出入口まで）の歩き方を、<b>立体図</b>と<b>1 手順ずつの案内</b>で示します。深い地下駅で「どの階段を下りるのか」「いま何階にいるのか」が分かるように作りました。スマートフォンでもパソコンでも、ブラウザだけで使えます。</p>
+  <p>対応駅（都営大江戸線 12 駅）: 新宿西口・東新宿・上野御徒町・大門・赤羽橋・麻布十番・六本木・青山一丁目・国立競技場・代々木・新宿・都庁前</p>
+  <figure><img src="manual/01_overview.jpg" alt="大門駅 A3 出入口から 4 番線までの案内の画面" loading="lazy"><figcaption>大門駅 A3 出入口 → 4 番線（赤羽橋方面）の例</figcaption></figure>
+</section>
+
+<section>
+  <h2><span class="no">1</span>駅・出発・目的地・移動の条件を選ぶ</h2>
+  <ol>
+    <li><b>駅</b>を選びます。</li>
+    <li><b>出発</b>と<b>目的地</b>を、出入口（<span class="exit">A3</span> など）かホーム（<span class="chip">4番線 赤羽橋方面</span> など）から選びます。⇄ で入れ替えられます。</li>
+    <li><b>移動の条件</b>を選びます。</li>
+  </ol>
+  <table>
+    <tr><th>標準</th><td>いちばん早い経路。階段と並んでいるエスカレーターがあれば、エスカレーターを選びます。</td></tr>
+    <tr><th>階段を使う</th><td>階段を優先。階段が無い所はエスカレーター、それも無ければエレベーター。</td></tr>
+    <tr><th>エスカレーターを使う</th><td>エスカレーターを優先。エスカレーターが無い所（たとえばホームへ下りる向きが無い）は階段、それも無ければエレベーター。</td></tr>
+    <tr><th>エレベーターを使う</th><td>段差なし。階段・エスカレーターを使いません。行けない出入口のときは、行ける出入口を近い順に出します。</td></tr>
+  </table>
+  <p>選んだ駅・出発・目的地・条件はこの端末に覚え、次に開いたときはそこから始まります。</p>
+  <p>上の欄には、かかる時間のめやすと、階段・エスカレーター・エレベーターの回数、ホームの<b>前から何両目</b>に着くか（降りるか）が出ます。</p>
+</section>
+
+<section>
+  <h2><span class="no">2</span>1 手順ずつ案内する</h2>
+  <div class="two">
+    <div>
+      <p>「<span class="sel">▶ 案内をはじめる</span>」か、左の「歩く順番」の手順を押すと、案内カードが出ます。</p>
+      <ul>
+        <li><b>◀ もどる／つぎへ ▶</b> で 1 手順ずつ進みます（パソコンは ← → キーでも。Esc でやめる）。屋内では現在地が取れないので、歩いたら「つぎへ」を押してください。</li>
+        <li>上り下りの手順には、<b>いまここ</b>と<b>ここへ</b>の階、階段・エスカレーター・エレベーターの形と向きのイラストが出ます。</li>
+        <li>改札の手順では、改札機を<span class="gate">緑の矢印</span>に沿って人が通り抜けます。出入口からホームへは「改札に入る」、ホームから出入口へは「改札を出る」。</li>
+        <li>通路の途中で大きく折り返すところは「折り返して、通路を約◯m 進む」と分けて出します。</li>
+      </ul>
+    </div>
+    <figure class="phone"><img src="manual/11_mobile_nav.jpg" alt="スマートフォンで案内している画面" loading="lazy"><figcaption>スマートフォンでは、立体図を上に、案内カードをその下に出し、ボタンは画面の下に固定します</figcaption></figure>
+  </div>
+  <figure><img src="manual/03_gate.jpg" alt="改札の手順。案内カードに改札機と人のイラスト、立体図に緑の矢印と人のマーク" loading="lazy"><figcaption>「改札に入る」の手順（国立競技場）</figcaption></figure>
+</section>
+
+<section>
+  <h2><span class="no">3</span>立体で見る</h2>
+  <p>駅の通路網を階ごとに重ねた立体図です。ドラッグで回転、ホイールやピンチで拡大します。</p>
+  <ul>
+    <li><b>いまの区間</b>は、青い帯に白い「︿」が並ぶ矢印（床の誘導線のような見た目）で、進む向きに流れます。丸が始まり、矢じりが終わりです。いま歩いている階は濃く、ほかの階は薄くなります。</li>
+    <li>階段・エスカレーター・エレベーターの<b>入口に波紋</b>が出ます。</li>
+    <li>右上の<b>方位マーク</b>は視点と一緒に回ります。押すと北が上になります。</li>
+    <li>上のボタンで<b>斜めから／横から／真上から</b>に切り替えられます。「<b>歩く様子</b>」は経路を後ろから追いかけます。</li>
+    <li>左下の<b>深さ</b>で高さの強調を変えられます（最初は ×0.5）。データには実際の深さが無いので、階の順番を見やすく並べたものです。</li>
+  </ul>
+  <figure><img src="manual/02_nav_stairs.jpg" alt="立体図で階段を下りる区間を矢印で示している画面" loading="lazy"><figcaption>「下り階段でホームへ」（大門）。ホームの前から 5 両目付近に着きます</figcaption></figure>
+  <h3>街並みと目印の建物</h3>
+  <p>地上には、国土交通省の 3D 都市モデル PLATEAU から、建物を実際の高さで、道路を車道・歩道に分けて描きます。名前のある代表的な建物（東京都庁第一本庁舎など）は目印として名前を出し、画面の外にある建物は端に向きの矢印つきで出します。「<b>街並み</b>」ボタンで表示・非表示、左下の「<b>街並みの濃さ</b>」で濃さを変えられます。案内中は経路が見やすいように建物を消します。</p>
+  <figure><img src="manual/04_landmarks.jpg" alt="都庁前駅の立体図に建物と目印の名前が出ている画面" loading="lazy"><figcaption>都庁前。東京都庁第一本庁舎・新宿住友ビル・京王プラザホテルが目印</figcaption></figure>
+</section>
+
+<section>
+  <h2><span class="no">4</span>ホームのどこか・上り下りの流れ</h2>
+  <ul>
+    <li><b>ホームのどこか</b>: 8 両の電車と進行方向、ホームにある階段・エスカレーター・エレベーターの位置、使う設備を示します。数字は進行方向の<b>前から数えた両数</b>です。</li>
+    <li><b>上り下りの流れ</b>: 駅を横から見た図です。横は歩く距離、縦は深さ。どこで何階分上り下りするかが一目で分かります。</li>
+  </ul>
+  <figure><img src="manual/05_figures.jpg" alt="ホームの図と、上り下りの流れの図" loading="lazy"></figure>
+</section>
+
+<section>
+  <h2>データと、その限界</h2>
+  <div class="warn">案内は公開データから自動で作っています。工事やエレベーターの休止、エスカレーターの向きの切り替え（時間帯による）は反映していません。実際の通行は駅の案内表示と係員の案内に従ってください。</div>
+  <ul>
+    <li>「前から何両目」は、ホームの乗車位置の並びと次の停車駅の方向から推定した値で、号車番号とは別です。</li>
+    <li>階の呼び方（地下 1 層目・改札のある階・中間の階など）はデータ上の階層から付けたもので、駅の表示（B1F など）と一致しない場合があります。</li>
+    <li>建物の高さは実測の値ですが、地下の深さは見やすく強調しているので、縮尺が違います。</li>
+  </ul>
+  <h3>使っているデータ</h3>
+  <table>
+    <tr><th>駅の中の通路網</th><td>東京都交通局・公共交通オープンデータセンター「鉄道関連情報（GTFS-Pathways）」2026年9月24日版（CC BY 4.0）。点 2,560・通路 2,864（階段 423・エスカレーター 187・エレベーター 129・改札 21）、出入口 60、ホーム 26</td></tr>
+    <tr><th>建物・建物の名前・道路</th><td>「3D都市モデル（Project PLATEAU）東京都23区（2025年度）」（国土交通省）を加工して作成。建物 3,656 棟、名前のある建物 31 棟、道路の面 3,589</td></tr>
+  </table>
+</section>
+
+<footer>エキしるべ ／ 公共交通オープンデータチャレンジ2026 応募作品 ／ <a href="./">アプリを開く</a></footer>
+</main>
+</body>
+</html>
