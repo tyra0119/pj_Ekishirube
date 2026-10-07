@@ -1188,7 +1188,7 @@ var View3D = (function () {
         var wk = personSprite(css('--gate'), 46);
         grp.add(wk); grp.userData.walker = wk; grp.userData.walkCurve = polyCurve(sp);
       }
-      Object.keys(rb.userData.extras).forEach(function (key) { grp.add(rb.userData.extras[key]); });
+      if (rb) Object.keys(rb.userData.extras).forEach(function (key) { grp.add(rb.userData.extras[key]); }); // 帯のときだけ（始まりの丸・終わりの矢じり）
       // 番号と手順の文
       var step = g.steps[k + 1], ctr = new THREE.Box3().setFromPoints(sp).getCenter(new THREE.Vector3());
       if (step) {
