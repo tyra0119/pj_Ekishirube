@@ -1286,7 +1286,15 @@ var View3D = (function () {
   function moveTo(pos, target, instant) {
     var dur = typeof instant === 'number' ? instant : 650; if (typeof instant === 'number') instant = false;
     if (instant || reduce) { camera.position.copy(pos); controls.target.copy(target); controls.update(); anim = null; return; }
-    anim = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos, t1: target, s: performance.now(), d: dur };
+    // 見ている先のまわりを回り込むように動かす（位置を直線で動かすと、向きが大きく変わるとき中心を横切る）。
+    // 見ている先は直線で、カメラは見ている先からの「水平の角度・高さの角度・距離」を少しずつ変える。回る向きは近い方
+    var o0 = camera.position.clone().sub(controls.target), o1 = pos.clone().sub(target);
+    function sph(o) { var r = o.length(); return { r: r, az: Math.atan2(o.x, o.z), el: Math.asin(Math.max(-1, Math.min(1, o.y / (r || 1)))) }; }
+    var a = sph(o0), b = sph(o1), daz = b.az - a.az;
+    while (daz > Math.PI) daz -= 2 * Math.PI;
+    while (daz < -Math.PI) daz += 2 * Math.PI;
+    dur = Math.max(dur, 900 + Math.abs(daz) / Math.PI * 700); // 大きく回るときほど長く（最長 1.6 秒）
+    anim = { t0: controls.target.clone(), t1: target, a: a, b: b, daz: daz, s: performance.now(), d: dur };
   }
 
   function setView(kind, instant) {
@@ -1439,7 +1447,9 @@ var View3D = (function () {
     var now = performance.now();
     if (anim) {
       var k = Math.min(1, (now - anim.s) / anim.d), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
-      camera.position.lerpVectors(anim.p0, anim.p1, e); controls.target.lerpVectors(anim.t0, anim.t1, e);
+      controls.target.lerpVectors(anim.t0, anim.t1, e);
+      var r = anim.a.r + (anim.b.r - anim.a.r) * e, az = anim.a.az + anim.daz * e, el = anim.a.el + (anim.b.el - anim.a.el) * e;
+      camera.position.set(controls.target.x + r * Math.cos(el) * Math.sin(az), controls.target.y + r * Math.sin(el), controls.target.z + r * Math.cos(el) * Math.cos(az));
       if (k >= 1) anim = null;
     }
     if (routeCurve && dot) {
