@@ -660,6 +660,58 @@ var View3D = (function () {
     return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: opacity, side: THREE.DoubleSide, depthWrite: false }));
   }
 
+  // 床の誘導線のような帯: 青地に白い「︿」が並ぶ模様（進む向きに流す）
+  var chevTex = null;
+  function chevronTexture() {
+    if (chevTex) return chevTex;
+    var c = document.createElement('canvas'); c.width = 64; c.height = 64;
+    var x = c.getContext('2d');
+    x.fillStyle = css('--sel'); x.fillRect(0, 0, 64, 64);
+    x.fillStyle = '#ffffff'; x.fillRect(0, 0, 5, 64); x.fillRect(59, 0, 5, 64); // 両端の白線
+    x.strokeStyle = '#ffffff'; x.lineWidth = 9; x.lineCap = 'round'; x.lineJoin = 'round';
+    x.beginPath(); x.moveTo(16, 44); x.lineTo(32, 24); x.lineTo(48, 44); x.stroke(); // 上（進む向き）を指す
+    chevTex = new THREE.CanvasTexture(c);
+    chevTex.wrapS = THREE.ClampToEdgeWrapping; chevTex.wrapT = THREE.RepeatWrapping;
+    chevTex.anisotropy = 4;
+    return chevTex;
+  }
+  // 点の列に沿った帯。どの角度から見ても同じ太さに見えるよう、毎コマ カメラの方へ向け直す（updateRibbon）
+  var RIBBON_PX = 20;
+  function ribbonAlong(pts) {
+    var n = pts.length, idx = [];
+    for (var i = 1; i < n; i++) { var b = (i - 1) * 2; idx.push(b, b + 1, b + 2, b + 1, b + 3, b + 2); }
+    var geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(new Float32Array(n * 6), 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(n * 4), 2));
+    geo.setIndex(idx);
+    var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: chevronTexture(), side: THREE.DoubleSide, depthTest: false }));
+    m.renderOrder = 6; m.frustumCulled = false; m.userData.pts = pts;
+    return m;
+  }
+  function updateRibbon(m) {
+    var pts = m.userData.pts, n = pts.length, pos = m.geometry.attributes.position, uv = m.geometry.attributes.uv;
+    var H = (el && el.clientHeight) || 440, k = RIBBON_PX * 2 * Math.tan(THREE.MathUtils.degToRad(19)) / H;
+    var prev = null, dist = 0, ws = [], i, t = new THREE.Vector3(), view = new THREE.Vector3(), perp = new THREE.Vector3();
+    for (i = 0; i < n; i++) ws.push(k * camera.position.distanceTo(pts[i]));
+    var wAvg = ws.reduce(function (a, b) { return a + b; }, 0) / n, REP = wAvg * 1.5; // 「︿」の間隔は帯の太さに合わせる
+    for (i = 0; i < n; i++) {
+      var p = pts[i];
+      t.set(0, 0, 0);
+      if (i > 0) t.add(p.clone().sub(pts[i - 1]).normalize());
+      if (i < n - 1) t.add(pts[i + 1].clone().sub(p).normalize());
+      view.copy(camera.position).sub(p).normalize();
+      perp.crossVectors(t, view);
+      if (perp.lengthSq() < 1e-6) perp.copy(prev || new THREE.Vector3(1, 0, 0)); else perp.normalize();
+      prev = perp.clone();
+      if (i > 0) dist += p.distanceTo(pts[i - 1]);
+      var o = perp.multiplyScalar(ws[i] / 2);
+      pos.setXYZ(i * 2, p.x + o.x, p.y + o.y, p.z + o.z);
+      pos.setXYZ(i * 2 + 1, p.x - o.x, p.y - o.y, p.z - o.z);
+      uv.setXY(i * 2, 0, dist / REP); uv.setXY(i * 2 + 1, 1, dist / REP);
+    }
+    pos.needsUpdate = true; uv.needsUpdate = true;
+  }
+
   function polyCurve(pts) {
     var path = new THREE.CurvePath();
     for (var i = 1; i < pts.length; i++) path.add(new THREE.LineCurve3(pts[i - 1], pts[i]));
@@ -708,7 +760,7 @@ var View3D = (function () {
     dispose();
     scene = new THREE.Scene();
     scene.background = new THREE.Color(css('--stage'));
-    segTubes = []; netMeshes = []; labels = []; anim = null; play = null;
+    segTubes = []; netMeshes = []; labels = []; chevTex = null; anim = null; play = null;
 
     var xs = st.nodes.map(function (n) { return n[0]; }), ys = st.nodes.map(function (n) { return n[1]; });
     var rawSpan = Math.max(Math.max.apply(null, xs) - Math.min.apply(null, xs), Math.max.apply(null, ys) - Math.min.apply(null, ys));
@@ -827,35 +879,20 @@ var View3D = (function () {
     });
     if (pts.length < 2) pts.push(pts[0].clone().add(new THREE.Vector3(0.1, 0, 0)));
     routeCurve = polyCurve(pts);
-    routeTube = new THREE.Mesh(new THREE.TubeGeometry(routeCurve, Math.min(1500, pts.length * 10), 0.9, 8, false),
+    routeTube = new THREE.Mesh(new THREE.TubeGeometry(routeCurve, Math.min(1500, pts.length * 10), 0.45, 6, false),
       new THREE.MeshBasicMaterial({ color: cOedo }));
     scene.add(routeTube);
 
-    // 手順ごとの強調（普段は隠す）: 青い管に白い縁、進む向きの矢印、番号と手順の文。
+    // 手順ごとの強調（普段は隠す）: 床に敷いた青い帯に白い「︿」が進む向きへ流れる（床の誘導線のように）。
     // 青は左の一覧・横から見た図の選択と同じ色。路線のマゼンタ・出入口の黄色と混ざらない
-    var HL = css('--sel'), EDGE = '#ffffff';
+    var HL = css('--sel');
     g.segs.forEach(function (s, k) {
       var sp = dedupe([V(st, s.from, 0.8)].concat(s.edges.map(function (e) { return V(st, e.b, 0.8); })));
       if (sp.length < 2) return;
       var curve = polyCurve(sp), n = Math.min(800, sp.length * 12);
       var grp = new THREE.Group();
-      var edge = new THREE.Mesh(new THREE.TubeGeometry(curve, n, 4.4, 10, false), new THREE.MeshBasicMaterial({ color: EDGE, side: THREE.BackSide }));
-      var core = new THREE.Mesh(new THREE.TubeGeometry(curve, n, 3.2, 10, false), new THREE.MeshBasicMaterial({ color: HL }));
-      edge.renderOrder = 5; core.renderOrder = 6;
-      grp.add(edge, core);
-      // 矢印（終わりの向き）
-      var end = sp[sp.length - 1], dir = end.clone().sub(sp[sp.length - 2]).normalize();
-      var q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-      var coneE = new THREE.Mesh(new THREE.ConeGeometry(7.4, 14, 16), new THREE.MeshBasicMaterial({ color: EDGE }));
-      var coneC = new THREE.Mesh(new THREE.ConeGeometry(5.8, 11, 16), new THREE.MeshBasicMaterial({ color: HL }));
-      [coneE, coneC].forEach(function (c, ci) {
-        c.quaternion.copy(q); c.position.copy(end).add(dir.clone().multiplyScalar(ci ? 6.4 : 5.6)); grp.add(c);
-      });
-      // 始まりの印
-      [[5.2, EDGE], [4.0, HL]].forEach(function (b) {
-        var ball = new THREE.Mesh(new THREE.SphereGeometry(b[0], 16, 12), new THREE.MeshBasicMaterial({ color: b[1] }));
-        ball.position.copy(sp[0]); ball.renderOrder = 7; grp.add(ball);
-      });
+      var rb = ribbonAlong(sp);
+      grp.add(rb); grp.userData.ribbon = rb;
       // 番号と手順の文
       var step = g.steps[k + 1], ctr = new THREE.Box3().setFromPoints(sp).getCenter(new THREE.Vector3());
       if (step) {
@@ -883,11 +920,6 @@ var View3D = (function () {
 
     routePts = pts;
     // いまの区間を流れる矢印と、昇降設備の波紋（選んだときだけ見せる）
-    beads = [];
-    for (var bi = 0; bi < 5; bi++) {
-      var bead = new THREE.Mesh(new THREE.ConeGeometry(2.0, 5.2, 12), new THREE.MeshBasicMaterial({ color: '#ffffff', depthTest: false }));
-      bead.renderOrder = 8; bead.visible = false; beads.push(bead); scene.add(bead);
-    }
     ripple = new THREE.Mesh(new THREE.RingGeometry(0.85, 1.25, 48), new THREE.MeshBasicMaterial({ color: css('--sel'), transparent: true, side: THREE.DoubleSide, depthTest: false }));
     ripple.rotation.x = -Math.PI / 2; ripple.renderOrder = 7; ripple.visible = false; scene.add(ripple);
     sel = null;
@@ -946,7 +978,7 @@ var View3D = (function () {
       if (sel) {
         // いま歩いている階は濃く、ほかの階は薄く
         if (u.lv) b = (u.lv[1] >= sel.lo - 0.01 && u.lv[0] <= sel.hi + 0.01) ? Math.min(1, b * 1.6) : b * 0.25;
-        else b *= 0.35; // 街並みは案内中はさらに控えめに
+        else b = sel.hi < -0.01 ? 0 : b * 0.35; // 街並みは、地下の手順では消し、地上にかかる手順では控えめに
       }
       m.material.opacity = b;
       m.visible = b > 0.003;
@@ -957,7 +989,7 @@ var View3D = (function () {
     var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
     segTubes.forEach(function (s) { s.visible = s === t; });
     sel = null;
-    if (t) sel = { i: i, lo: t.userData.lo, hi: t.userData.hi, curve: t.userData.curve, ring: t.userData.vert ? t.userData.start : null };
+    if (t) sel = { i: i, lo: t.userData.lo, hi: t.userData.hi, curve: t.userData.curve, ring: t.userData.vert ? t.userData.start : null, ribbon: t.userData.ribbon };
     else if (i >= 0 && lastArgs && routePts.length) {
       // 出発・到着の手順は、その場所に波紋だけ出す
       var g = lastArgs[1], last = g.steps.length - 1;
@@ -972,7 +1004,6 @@ var View3D = (function () {
       l.material.opacity = on && !l.userData.step ? 0.35 : 1;
       if (l.userData.stem) l.userData.stem.material.opacity = on ? 0.15 : 0.45;
     });
-    beads.forEach(function (b) { b.visible = !!(sel && sel.curve); });
     if (ripple) { ripple.visible = !!(sel && sel.ring); if (sel && sel.ring) ripple.position.copy(sel.ring).add(new THREE.Vector3(0, 0.3, 0)); }
     if (dot) dot.visible = !on || !!play;
     applyOpacity();
@@ -1009,7 +1040,7 @@ var View3D = (function () {
     else if (sel && sel.ring) { center = sel.ring; size = 20; } // 出発・到着
     else return;
     play = null;
-    var off = camera.position.clone().sub(controls.target).normalize().multiplyScalar(Math.max(160, size * 3, home.dist * 0.6));
+    var off = camera.position.clone().sub(controls.target).normalize().multiplyScalar(Math.max(90, size * 3.2, home.dist * 0.3)); // 短い区間は近くに、長い区間は全体が入るように
     moveTo(center.clone().add(off), center.clone());
   }
 
@@ -1045,13 +1076,8 @@ var View3D = (function () {
       }
       dot.position.copy(routeCurve.getPointAt(u));
     }
-    if (sel && sel.curve) {
-      beads.forEach(function (b, k) {
-        var u = reduce ? (k + 0.5) / beads.length : ((now / 1800 + k / beads.length) % 1);
-        b.position.copy(sel.curve.getPointAt(u));
-        b.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), sel.curve.getTangentAt(Math.min(0.999, u)).normalize());
-      });
-    }
+    if (sel && sel.ribbon) updateRibbon(sel.ribbon);
+    if (sel && sel.curve && chevTex && !reduce) chevTex.offset.y = -((now / 1000) * 1.2 % 1); // 「︿」を進む向きへ流す
     if (ripple && ripple.visible) {
       var ph = reduce ? 0.4 : (now / 1500) % 1;
       ripple.scale.setScalar(3 + ph * 9);
