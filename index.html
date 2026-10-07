@@ -268,10 +268,10 @@ footer a { color: inherit; }
   <form class="controls" id="form" autocomplete="off">
     <div class="field f-station"><label for="station">駅</label><select id="station"></select></div>
     <div class="field"><label for="from">出発</label><select id="from"></select></div>
-    <button class="swap" type="button" id="swap" title="出発と到着を入れ替える" aria-label="出発と到着を入れ替える">
+    <button class="swap" type="button" id="swap" title="出発と目的地を入れ替える" aria-label="出発と目的地を入れ替える">
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12M12 3l4 4-4 4M16 13H4M8 9l-4 4 4 4"/></svg>
     </button>
-    <div class="field"><label for="to">到着</label><select id="to"></select></div>
+    <div class="field"><label for="to">目的地</label><select id="to"></select></div>
     <div class="profiles" role="radiogroup" aria-label="移動の条件">
       <span class="lbl">移動の条件</span>
       <label class="seg"><input type="radio" name="profile" id="p-std" value="std" checked><span>標準（いちばん早い）</span></label>
@@ -1333,11 +1333,20 @@ var View3D = (function () {
     return '<span class="platbadge">' + icon('train', 15) + esc(Guide.platLabel(state.st, p)) + '</span>';
   }
 
+  var SAVE_KEY = 'ekishirube.choice';
+  function saveChoice() {
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify({ st: state.st.id, from: $('from').value, to: $('to').value, pr: profile() })); } catch (e) {}
+  }
+  function loadChoice() {
+    try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || null; } catch (e) { return null; }
+  }
+
   function run() {
+    saveChoice();
     var st = state.st, from = parseEp($('from').value), to = parseEp($('to').value), pr = profile();
     var out = $('out');
     if (from.type === to.type && from.id === to.id) {
-      out.innerHTML = '<div class="notice">出発と到着が同じです。どちらかを変えてください。</div>'; return;
+      out.innerHTML = '<div class="notice">出発と目的地が同じです。どちらかを変えてください。</div>'; return;
     }
     if (from.type === 'exit' && to.type === 'exit') {
       out.innerHTML = '<div class="notice">出入口どうしの案内には対応していません。片方をホームにしてください。</div>'; return;
@@ -1725,8 +1734,17 @@ var View3D = (function () {
 
   if (window.CITY && CITY.year) $('city-credit').textContent = '建物と道路：「3D都市モデル（Project PLATEAU）東京都23区（' + CITY.year + '年度）」（国土交通省）を加工して作成。建物の高さは実測の値で、地下の深さ（強調あり）とは縮尺が違います。';
   // 初期状態: 大門駅 A3出入口 → 4番線（赤羽橋方面）
-  var start = STATIONS.findIndex(function (s) { return s.name === '大門'; });
-  setStation(start < 0 ? 0 : start, 'exit:A3', 'plat:421P4');
+  // 前回の選択があればそこから。無ければ大門駅 A3出入口 → 4番線
+  var saved = loadChoice(), start = -1;
+  if (saved) {
+    start = STATIONS.findIndex(function (s) { return s.id === saved.st; });
+    if (saved.pr && $('p-' + saved.pr)) $('p-' + saved.pr).checked = true;
+  }
+  if (start >= 0) setStation(start, saved.from, saved.to);
+  else {
+    start = STATIONS.findIndex(function (s) { return s.name === '大門'; });
+    setStation(start < 0 ? 0 : start, 'exit:A3', 'plat:421P4');
+  }
   // 日本語フォントが届いたら、立体図のラベルを描き直す
   if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { run(); });
   if (window.matchMedia) matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () { run(); });
