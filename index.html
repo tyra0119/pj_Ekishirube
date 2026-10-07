@@ -234,6 +234,11 @@ footer a { color: inherit; }
 .il-box { fill: var(--surface); stroke: var(--ink); stroke-width: 3; }
 .il-arrow { fill: none; stroke: var(--sel); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
 .il-here { fill: var(--sel); }
+.il-zone-out { fill: var(--surface); }
+.il-line { stroke: var(--sel); stroke-width: 2; stroke-dasharray: 5 5; }
+.il-zone-in { fill: var(--sel-soft); }
+.il-ic { fill: var(--sel); }
+.il-flap { fill: none; stroke: var(--oedo); stroke-width: 4; stroke-linecap: round; }
 
 @media (max-width: 960px) {
   .controls { grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); }
@@ -502,7 +507,10 @@ var Guide = (function () {
         var d = s.steps ? '途中に数段の段差があります。' : '';
         steps.push({ kind: 'walk', icon: 'walk', title: t, detail: d, z: s.z0, len: s.len });
       } else if (s.kind === 'gate') {
-        steps.push({ kind: 'gate', icon: 'gate', title: '改札を通る', detail: '', z: s.z0 });
+        var enter = from.type === 'exit';
+        steps.push({ kind: 'gate', icon: 'gate', enter: enter, z: s.z0,
+          title: enter ? '改札に入る' : '改札を出る',
+          detail: enter ? 'ICカードやきっぷを用意して、改札を通ります。' : 'ICカードやきっぷで、改札を通って外に出ます。' });
       } else {
         counts[s.mode]++;
         var up = s.z1 > s.z0, word = MODE_WORD[s.mode];
@@ -1536,7 +1544,31 @@ var View3D = (function () {
   });
 
   // 上り下りのイラスト: どの階からどの階へ、何で動くか（文字が読めなくても分かるように）
+  // 改札のイラスト: 改札機の列を上から見た図。矢印が改札機のあいだを通り抜け、左右が改札の外と中
+  function gateIllust(s) {
+    var W = 420, H = 150, gx = 190, left = s.enter ? '改札の外' : '改札の中', right = s.enter ? '改札の中' : '改札の外';
+    var out = '<rect class="il-zone-' + (s.enter ? 'out' : 'in') + '" x="0" y="0" width="' + gx + '" height="' + H + '" rx="10"/>' +
+      '<rect class="il-zone-' + (s.enter ? 'in' : 'out') + '" x="' + gx + '" y="0" width="' + (W - gx) + '" height="' + H + '" rx="10"/>';
+    // 改札機（通る向きに長い箱）を 4 台。通るのは 2 台目と 3 台目のあいだ
+    var ys = [14, 50, 92, 128], cab = '';
+    ys.forEach(function (y) {
+      cab += '<rect class="il-box" x="' + (gx - 44) + '" y="' + (y - 8) + '" width="88" height="16" rx="4"/>' +
+        // IC の読み取り部（入る側の端）
+        '<circle class="il-ic" cx="' + (gx - 30) + '" cy="' + y + '" r="5"/>';
+    });
+    // 扉（開いている）
+    var line = '<line class="il-line" x1="' + gx + '" x2="' + gx + '" y1="0" y2="' + H + '"/>'; // 改札の境目
+    var flaps = '<path class="il-flap" d="M' + (gx + 10) + ' 58 l10 8 M' + (gx + 10) + ' 84 l10 -8"/>';
+    var arrow = '<path class="il-arrow" d="M40 71 H' + (W - 70) + ' M' + (W - 88) + ' 57 L' + (W - 70) + ' 71 L' + (W - 88) + ' 85"/>';
+    return '<div class="illust"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(s.title) + '">' + out + line + cab + flaps + arrow +
+      '<text class="il-txt" x="14" y="' + (H - 12) + '">' + left + '</text>' +
+      '<text class="il-txt" x="' + (W - 14) + '" y="' + (H - 12) + '" text-anchor="end">' + right + '</text>' +
+      '<text class="il-sub" x="' + (gx - 30) + '" y="' + (ys[0] - 14 < 8 ? 8 : ys[0] - 14) + '" text-anchor="middle">IC</text>' +
+      '</svg></div>';
+  }
+
   function illust(s) {
+    if (s.kind === 'gate') return gateIllust(s);
     if (s.kind !== 'vert') return '';
     var st = state.st, up = s.up, hiZ = Math.max(s.z, s.z1), loZ = Math.min(s.z, s.z1);
     var top = Guide.levelName(st, hiZ), bot = Guide.levelName(st, loZ);
