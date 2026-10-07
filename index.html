@@ -516,7 +516,12 @@ var Guide = (function () {
           var rest = s.edges.slice(s.edges.indexOf(e)).reduce(function (t, x) { return t + x.len; }, 0);
           if (cos < -0.707 && run >= 4 && rest >= 4) { // 折り返し。前後とも 4 m 以上あるときだけ分ける
             split.push(cur);
-            cur = { kind: 'walk', edges: [], steps: 0, uturn: true };
+            var lastDir = null;
+            for (var hk = hist.length - 1; hk >= 0 && !lastDir; hk--) if (hist[hk][2] >= 1.5) lastDir = [hist[hk][0] / hist[hk][2], hist[hk][1] / hist[hk][2]];
+            lastDir = lastDir || prevDir;
+            var c2 = (dx * lastDir[0] + dy * lastDir[1]) / L, cross = lastDir[0] * dy - lastDir[1] * dx; // 正なら左（反時計回り）
+            var turn = c2 < -0.7 ? 'back' : cross > 0 ? 'left' : 'right';
+            cur = { kind: 'walk', edges: [], steps: 0, uturn: true, turn: turn };
             run = 0;
             hist = [];
           }
@@ -593,10 +598,12 @@ var Guide = (function () {
       if (s.kind === 'walk') {
         var m = Math.max(5, Math.round(s.len / 5) * 5);
         var onPlat = stationMeta(st).platLevels[s.z0];
-        var again = s.uturn && steps.length && steps[steps.length - 1].icon === 'uturn';
-        var t = (s.uturn ? (again ? 'さらに折り返して、' : '折り返して、') : '') + (onPlat ? 'ホーム上を' : '通路を') + '約' + m + 'm 進む';
+        var again = s.turn === 'back' && steps.length && steps[steps.length - 1].icon === 'uturn';
+        var prevIcon = steps.length ? steps[steps.length - 1].icon : '', same = (s.turn === 'right' && prevIcon === 'turnR') || (s.turn === 'left' && prevIcon === 'turnL');
+        var lead = !s.uturn ? '' : s.turn === 'right' ? (same ? 'さらに右に曲がって、' : '右に曲がって、') : s.turn === 'left' ? (same ? 'さらに左に曲がって、' : '左に曲がって、') : again ? 'さらに折り返して、' : '折り返して、';
+        var t = lead + (onPlat ? 'ホーム上を' : '通路を') + '約' + m + 'm 進む';
         var d = s.steps ? '途中に数段の段差があります。' : '';
-        steps.push({ kind: 'walk', icon: s.uturn ? 'uturn' : 'walk', title: t, detail: d, z: s.z0, len: s.len });
+        steps.push({ kind: 'walk', icon: !s.uturn ? 'walk' : s.turn === 'right' ? 'turnR' : s.turn === 'left' ? 'turnL' : 'uturn', title: t, detail: d, z: s.z0, len: s.len });
       } else if (s.kind === 'gate') {
         var enter = from.type === 'exit';
         steps.push({ kind: 'gate', icon: 'gate', enter: enter, z: s.z0,
@@ -1509,6 +1516,8 @@ var View3D = (function () {
   var ICON = {
     walk: '<path d="M3 10h13M12 5l5 5-5 5"/>',
     uturn: '<path d="M14 17V8a4 4 0 0 0-8 0v9M3 13.5l3 3.5 3-3.5"/>',
+    turnR: '<path d="M6 17V10a3 3 0 0 1 3-3h8M13.5 3.5 17 7l-3.5 3.5"/>',
+    turnL: '<path d="M14 17V10a3 3 0 0 0-3-3H3M6.5 3.5 3 7l3.5 3.5"/>',
     stairUp: '<path d="M2 17h4v-4h4V9h4V5h4"/>',
     stairDown: '<path d="M2 5h4v4h4v4h4v4h4"/>',
     escUp: '<path d="M2 16h4l8-10h4"/><path d="M6 16l8-10" opacity=".45"/>',
@@ -1660,7 +1669,7 @@ var View3D = (function () {
     }
     if (s.icon === 'train') return '<div class="ico train">' + icon('train') + '</div>';
     if (s.icon === 'walk') return '<div class="ico">' + icon('walk') + '</div>';
-    if (s.icon === 'uturn') return '<div class="ico">' + icon('uturn') + '</div>';
+    if (s.icon === 'uturn' || s.icon === 'turnR' || s.icon === 'turnL') return '<div class="ico">' + icon(s.icon) + '</div>';
     if (s.icon === 'gate') return '<div class="ico gate">' + icon('gate') + '</div>';
     if (s.icon === 'ev') return '<div class="ico v">' + icon('ev') + '</div>';
     if (s.icon === 'esc') return '<div class="ico v">' + icon(s.up ? 'escUp' : 'escDown') + '</div>';
