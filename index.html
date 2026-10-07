@@ -700,8 +700,9 @@ var View3D = (function () {
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(n * 4), 2));
     geo.setIndex(idx);
     // 帯どうしは奥行きを比べる（折り返す階段で、奥の後半が手前の前半に重ならないように）。
-    // 描く直前に奥行きを消すので、建物や通路網には隠されない
-    var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: chevronTexture(), side: THREE.DoubleSide, depthTest: true, depthWrite: true }));
+    // 描く直前に奥行きを消すので、建物や通路網には隠されない。
+    // 半透明の物は透けない物より後に描かれるので、帯も半透明扱いにして、半透明の経路の線・通路網より後（renderOrder 11）に描く
+    var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: chevronTexture(), side: THREE.DoubleSide, depthTest: true, depthWrite: true, transparent: true, opacity: 1 }));
     m.onBeforeRender = function (r) { r.clearDepth(); };
     m.renderOrder = 11; m.frustumCulled = false; m.userData.pts = pts; // 札（10）より手前、手順のラベル（12）より奥
     return m;
