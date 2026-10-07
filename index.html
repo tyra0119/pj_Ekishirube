@@ -23,6 +23,7 @@
   --oedo-soft: #fbe3ea;
   --sel: #1f6feb;
   --sel-soft: #e2ecff;
+  --gate: #12994a;
   --exit: #f5c400;
   --exit-ink: #131313;
   --sign: #1c2333;
@@ -41,7 +42,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #111319; --surface: #1a1d25; --ink: #eceef3; --muted: #a2a9b8; --line: #2f3440; --faint: #232731;
-    --oedo: #ff5d8c; --oedo-soft: #3b1d29; --sel: #4d8fff; --sel-soft: #16233d; --sel: #4d8fff; --sel-soft: #16233d; --sign: #0b0e15; --walk: #737b8c; --warn: #f2b45a; --warn-soft: #33270f;
+    --oedo: #ff5d8c; --oedo-soft: #3b1d29; --sel: #4d8fff; --sel-soft: #16233d; --gate: #2fc46b; --sel: #4d8fff; --sel-soft: #16233d; --gate: #2fc46b; --sign: #0b0e15; --walk: #737b8c; --warn: #f2b45a; --warn-soft: #33270f;
     --stage: #0c0e13;
     --road: #262b35;
     --sidewalk: #2f3541;
@@ -232,6 +233,7 @@ footer a { color: inherit; }
 .il-sub { fill: var(--muted); font-size: 12px; font-family: var(--f-body); }
 .il-dev { fill: none; stroke: var(--ink); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
 .il-box { fill: var(--surface); stroke: var(--ink); stroke-width: 3; }
+.il-arrow.gate { stroke: var(--gate); }
 .il-arrow { fill: none; stroke: var(--sel); stroke-width: 7; stroke-linecap: round; stroke-linejoin: round; }
 .il-here { fill: var(--sel); }
 .il-zone-out { fill: var(--surface); }
@@ -711,23 +713,25 @@ var View3D = (function () {
   }
 
   // 床の誘導線のような帯: 青地に白い「︿」が並ぶ模様（進む向きに流す）
-  var chevTex = null;
-  function chevronTexture() {
-    if (chevTex) return chevTex;
+  var chevTexs = {}; // 色ごとの「︿」の模様
+  function chevronTexture(color) {
+    if (chevTexs[color]) return chevTexs[color];
+    var chevTex;
     var c = document.createElement('canvas'); c.width = 64; c.height = 64;
     var x = c.getContext('2d');
-    x.fillStyle = css('--sel'); x.fillRect(0, 0, 64, 64);
+    x.fillStyle = color; x.fillRect(0, 0, 64, 64);
     x.fillStyle = '#ffffff'; x.fillRect(0, 0, 5, 64); x.fillRect(59, 0, 5, 64); // 両端の白線
     x.strokeStyle = '#ffffff'; x.lineWidth = 9; x.lineCap = 'round'; x.lineJoin = 'round';
     x.beginPath(); x.moveTo(16, 44); x.lineTo(32, 24); x.lineTo(48, 44); x.stroke(); // 上（進む向き）を指す
     chevTex = new THREE.CanvasTexture(c);
     chevTex.wrapS = THREE.ClampToEdgeWrapping; chevTex.wrapT = THREE.RepeatWrapping;
     chevTex.anisotropy = 4;
+    chevTexs[color] = chevTex;
     return chevTex;
   }
   // 点の列に沿った帯。どの角度から見ても同じ太さに見えるよう、毎コマ カメラの方へ向け直す（updateRibbon）
   var RIBBON_PX = 20;
-  function ribbonAlong(pts) {
+  function ribbonAlong(pts, color) {
     var n = pts.length, idx = [];
     for (var i = 1; i < n; i++) { var b = (i - 1) * 2; idx.push(b, b + 1, b + 2, b + 1, b + 3, b + 2); }
     var geo = new THREE.BufferGeometry();
@@ -737,7 +741,7 @@ var View3D = (function () {
     // 帯どうしは奥行きを比べる（折り返す階段で、奥の後半が手前の前半に重ならないように）。
     // 描く直前に奥行きを消すので、建物や通路網には隠されない。
     // 半透明の物は透けない物より後に描かれるので、帯も半透明扱いにして、半透明の経路の線・通路網より後（renderOrder 11）に描く
-    var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: chevronTexture(), side: THREE.DoubleSide, depthTest: true, depthWrite: true, transparent: true, opacity: 1 }));
+    var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: chevronTexture(color), side: THREE.DoubleSide, depthTest: true, depthWrite: true, transparent: true, opacity: 1 }));
     m.onBeforeRender = function (r) { r.clearDepth(); };
     m.renderOrder = 11; m.frustumCulled = false; m.userData.pts = pts; // 札（10）より手前、手順のラベル（12）より奥
     // 始まりの丸と終わりの矢じり。白い縁は帯より先（帯に隠れる所は消える）、青は帯より後に描く
@@ -748,7 +752,7 @@ var View3D = (function () {
       x.renderOrder = order; x.frustumCulled = false;
       return x;
     }
-    var SEG = 20, selColor = css('--sel');
+    var SEG = 20, selColor = color;
     m.userData.extras = {
       dotBg: flat(SEG * 3, '#ffffff', 10.9), dot: flat(SEG * 3, selColor, 11.5),
       headBg: flat(3, '#ffffff', 10.9), head: flat(3, selColor, 11.5)
@@ -878,7 +882,7 @@ var View3D = (function () {
     dispose();
     scene = new THREE.Scene();
     scene.background = new THREE.Color(css('--stage'));
-    segTubes = []; netMeshes = []; labels = []; chevTex = null; anim = null; play = null;
+    segTubes = []; netMeshes = []; labels = []; chevTexs = {}; anim = null; play = null;
 
     var xs = st.nodes.map(function (n) { return n[0]; }), ys = st.nodes.map(function (n) { return n[1]; });
     var rawSpan = Math.max(Math.max.apply(null, xs) - Math.min.apply(null, xs), Math.max.apply(null, ys) - Math.min.apply(null, ys));
@@ -1009,7 +1013,8 @@ var View3D = (function () {
       if (sp.length < 2) return;
       var curve = polyCurve(sp), n = Math.min(800, sp.length * 12);
       var grp = new THREE.Group();
-      var rb = ribbonAlong(sp);
+      // 改札は、実際の自動改札機の「通れる」表示と同じ緑。ほかは選んだ手順の青
+      var rb = ribbonAlong(sp, s.kind === 'gate' ? css('--gate') : HL);
       grp.add(rb); grp.userData.ribbon = rb;
       Object.keys(rb.userData.extras).forEach(function (key) { grp.add(rb.userData.extras[key]); });
       // 番号と手順の文
@@ -1215,7 +1220,7 @@ var View3D = (function () {
       dot.position.copy(routeCurve.getPointAt(u));
     }
     if (sel && sel.ribbon) updateRibbon(sel.ribbon);
-    if (sel && sel.curve && chevTex && !reduce) chevTex.offset.y = -((now / 1000) * 1.2 % 1); // 「︿」を進む向きへ流す
+    if (sel && sel.ribbon && !reduce) sel.ribbon.material.map.offset.y = -((now / 1000) * 1.2 % 1); // 「︿」を進む向きへ流す
     if (ripple && ripple.visible) {
       var ph = reduce ? 0.4 : (now / 1500) % 1;
       ripple.scale.setScalar(3 + ph * 9);
@@ -1665,7 +1670,7 @@ var View3D = (function () {
     // 扉（開いている）
     var line = '<line class="il-line" x1="' + gx + '" x2="' + gx + '" y1="0" y2="' + H + '"/>'; // 改札の境目
     var flaps = '<path class="il-flap" d="M' + (gx + 10) + ' 58 l10 8 M' + (gx + 10) + ' 84 l10 -8"/>';
-    var arrow = '<path class="il-arrow" d="M40 71 H' + (W - 70) + ' M' + (W - 88) + ' 57 L' + (W - 70) + ' 71 L' + (W - 88) + ' 85"/>';
+    var arrow = '<path class="il-arrow gate" d="M40 71 H' + (W - 70) + ' M' + (W - 88) + ' 57 L' + (W - 70) + ' 71 L' + (W - 88) + ' 85"/>';
     return '<div class="illust"><svg viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(s.title) + '">' + out + line + cab + flaps + arrow +
       '<text class="il-txt" x="14" y="' + (H - 12) + '">' + left + '</text>' +
       '<text class="il-txt" x="' + (W - 14) + '" y="' + (H - 12) + '" text-anchor="end">' + right + '</text>' +
