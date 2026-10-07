@@ -501,7 +501,7 @@ var View3D = (function () {
   var depth = 1, lastArgs = null; // 深さの倍率（利用者が調整）と、作り直し用の引数
   try { var saved = parseFloat(localStorage.getItem('ekishirube.depth')); if (saved > 0) depth = saved; } catch (e) {}
   var renderer, scene, camera, controls, el, ro, started = false;
-  var segTubes = [], routeTube, routeCurve, dot, edgeCum = [], edgeStep = [], total = 0;
+  var segTubes = [], netMeshes = [], routeTube, routeCurve, dot, edgeCum = [], edgeStep = [], total = 0;
   var home = null, platAxis = null, anim = null, play = null, onStep = null;
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -584,7 +584,7 @@ var View3D = (function () {
     dispose();
     scene = new THREE.Scene();
     scene.background = new THREE.Color(css('--stage'));
-    segTubes = []; anim = null; play = null;
+    segTubes = []; netMeshes = []; anim = null; play = null;
 
     var xs = st.nodes.map(function (n) { return n[0]; }), ys = st.nodes.map(function (n) { return n[1]; });
     var rawSpan = Math.max(Math.max.apply(null, xs) - Math.min.apply(null, xs), Math.max.apply(null, ys) - Math.min.apply(null, ys));
@@ -603,13 +603,14 @@ var View3D = (function () {
       (isV ? vert : pass).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
         a.x - px, a.y, a.z - pz, b.x - px, b.y, b.z - pz, b.x + px, b.y, b.z + pz);
     });
-    scene.add(ribbonMesh(pass, cWalk, 0.32));
-    scene.add(ribbonMesh(vert, cMuted, 0.55));
+    [ribbonMesh(pass, cWalk, 0.32), ribbonMesh(vert, cMuted, 0.55)].forEach(function (m) {
+      m.userData.base = m.material.opacity; netMeshes.push(m); scene.add(m);
+    });
     shafts.forEach(function (s) {
       var h = Math.abs(s[0].y - s[1].y);
       var m = new THREE.Mesh(new THREE.BoxGeometry(2.4, h, 2.4), new THREE.MeshBasicMaterial({ color: cMuted, transparent: true, opacity: 0.28, depthWrite: false }));
       m.position.set((s[0].x + s[1].x) / 2, (s[0].y + s[1].y) / 2, (s[0].z + s[1].z) / 2);
-      scene.add(m);
+      m.userData.base = 0.28; netMeshes.push(m); scene.add(m);
     });
 
     // 範囲
@@ -690,15 +691,37 @@ var View3D = (function () {
       new THREE.MeshBasicMaterial({ color: cOedo }));
     scene.add(routeTube);
 
-    // 手順ごとの強調用の管（普段は隠す）
+    // 手順ごとの強調（普段は隠す）: 黄色の管に黒い縁、進む向きの矢印、番号と手順の文
+    var HL = '#f5c400', EDGE = '#15181f';
     g.segs.forEach(function (s, k) {
       var sp = dedupe([V(st, s.from, 0.8)].concat(s.edges.map(function (e) { return V(st, e.b, 0.8); })));
       if (sp.length < 2) return;
-      var t = new THREE.Mesh(new THREE.TubeGeometry(polyCurve(sp), sp.length * 10, 1.8, 8, false),
-        new THREE.MeshBasicMaterial({ color: cInk, transparent: true, opacity: 0.9 }));
-      t.visible = false; t.userData.step = k + 1;
-      t.userData.center = new THREE.Box3().setFromPoints(sp).getCenter(new THREE.Vector3());
-      segTubes.push(t); scene.add(t);
+      var curve = polyCurve(sp), n = Math.min(800, sp.length * 12);
+      var grp = new THREE.Group();
+      var edge = new THREE.Mesh(new THREE.TubeGeometry(curve, n, 3.0, 10, false), new THREE.MeshBasicMaterial({ color: EDGE, side: THREE.BackSide }));
+      var core = new THREE.Mesh(new THREE.TubeGeometry(curve, n, 2.1, 10, false), new THREE.MeshBasicMaterial({ color: HL }));
+      edge.renderOrder = 5; core.renderOrder = 6;
+      grp.add(edge, core);
+      // 矢印（終わりの向き）
+      var end = sp[sp.length - 1], dir = end.clone().sub(sp[sp.length - 2]).normalize();
+      var q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+      var coneE = new THREE.Mesh(new THREE.ConeGeometry(5.2, 10, 16), new THREE.MeshBasicMaterial({ color: EDGE }));
+      var coneC = new THREE.Mesh(new THREE.ConeGeometry(4.0, 8, 16), new THREE.MeshBasicMaterial({ color: HL }));
+      [coneE, coneC].forEach(function (c, ci) {
+        c.quaternion.copy(q); c.position.copy(end).add(dir.clone().multiplyScalar(ci ? 4.6 : 4)); grp.add(c);
+      });
+      // 始まりの印
+      var startBall = new THREE.Mesh(new THREE.SphereGeometry(3.2, 16, 12), new THREE.MeshBasicMaterial({ color: EDGE }));
+      startBall.position.copy(sp[0]); grp.add(startBall);
+      // 番号と手順の文
+      var step = g.steps[k + 1], ctr = new THREE.Box3().setFromPoints(sp).getCenter(new THREE.Vector3());
+      if (step) {
+        var lb = label((k + 2) + '. ' + step.title, EDGE, '#ffffff', span * 0.04);
+        lb.position.set(ctr.x, Math.max.apply(null, sp.map(function (p) { return p.y; })) + LV * 0.5, ctr.z);
+        grp.add(lb);
+      }
+      grp.visible = false; grp.userData.step = k + 1; grp.userData.center = ctr;
+      segTubes.push(grp); scene.add(grp);
     });
 
     // 始点と終点
@@ -756,8 +779,12 @@ var View3D = (function () {
   }
 
   function highlight(i) {
+    var on = segTubes.some(function (t) { return t.userData.step === i; });
     segTubes.forEach(function (t) { t.visible = t.userData.step === i; });
-    if (routeTube) { routeTube.material.transparent = i >= 0; routeTube.material.opacity = i >= 0 ? 0.45 : 1; }
+    // 選んでいる間は、ほかの経路と通路網を薄くし、歩く人を隠す
+    if (routeTube) { routeTube.material.transparent = on; routeTube.material.opacity = on ? 0.25 : 1; routeTube.material.needsUpdate = true; }
+    netMeshes.forEach(function (m) { m.material.opacity = on ? m.userData.base * 0.45 : m.userData.base; });
+    if (dot) dot.visible = !on || !!play;
   }
 
   function focus(i) {
