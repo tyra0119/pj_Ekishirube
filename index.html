@@ -350,7 +350,9 @@ var Guide = (function () {
       if (profile === 'ev') return Infinity;
       var c2 = len / 0.6 + 3;
       // 階段を使う: エスカレーターは避けるが、階段が無いときはエレベーターよりエスカレーター
-      return profile === 'stair' && vertical ? c2 * 2 + 90 : c2;
+      if (profile === 'stair' && vertical) return c2 * 2 + 90;
+      // 標準: 階段と並んでいるエスカレーター（数メートルの寄り道で乗れるもの）は、エスカレーターを選ぶ
+      return profile === 'std' && vertical ? c2 * 0.75 : c2;
     }
     if (mode === EV) {
       if (!vertical) return len / 1.0;
