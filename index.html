@@ -1200,7 +1200,8 @@ var View3D = (function () {
       grp.userData.lo = Math.min(s.z0, s.z1); grp.userData.hi = Math.max(s.z0, s.z1); grp.userData.vert = s.kind === 'vert'; grp.userData.start = V(st, s.from, 0.8); // 波紋は昇降設備の入口に
       grp.userData.size = new THREE.Box3().setFromPoints(sp).getSize(new THREE.Vector3()).length();
       // 進む向き（水平）。始まりから終わりへ。エレベーターなど水平に動かない区間は無し
-      var dv = new THREE.Vector3(sp[sp.length - 1].x - sp[0].x, 0, sp[sp.length - 1].z - sp[0].z);
+      // （手順の前に含めた短い通路 s.lead は入れない。逆の方向から来ると向きが反対になる）
+      var pa = V(st, s.from), pb = V(st, s.to), dv = new THREE.Vector3(pb.x - pa.x, 0, pb.z - pa.z);
       grp.userData.dir = dv.length() > 2 ? dv.normalize() : null;
       segTubes.push(grp); scene.add(grp);
     });
