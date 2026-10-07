@@ -1215,7 +1215,6 @@ var View3D = (function () {
         dv.x += hx; dv.z -= hy; acc += Math.hypot(hx, hy);
       }
       grp.userData.dir = dv.length() > 2 ? dv.normalize() : null;
-      grp.userData.walkLen = s.len; // その手順で歩く長さ（向きを変えるか決める）
       segTubes.push(grp); scene.add(grp);
     });
 
@@ -1410,23 +1409,7 @@ var View3D = (function () {
     play = null;
     var D = Math.max(90, size * 3.2, home.dist * 0.3); // 短い区間は近くに、長い区間は全体が入るように
     var dir = t && t.userData.dir, off;
-    // 前の視点からの向きの変わり方を抑える（一気に 180 度回ると、どこで曲がったか分からない）。
-    // 短い手順（10 m 未満）は向きを変えず、長い手順も 1 回で回るのは 90 度まで
-    if (dir) {
-      var cur = controls.target.clone().sub(camera.position); cur.y = 0;
-      if (cur.lengthSq() > 1e-6) {
-        cur.normalize();
-        // いまの視線は進む向きから左後ろへずらした分だけ回っているので、その分を戻して「いま見ている進む向き」にする
-        var b0 = -Math.atan2(0.38, 0.62), cb = Math.cos(b0), sb = Math.sin(b0);
-        cur = new THREE.Vector3(cur.x * cb - cur.z * sb, 0, cur.x * sb + cur.z * cb);
-        var walkLen = t.userData.walkLen || size;
-        if (walkLen < 10) dir = cur.clone();
-        else {
-          var ang = Math.atan2(cur.x * dir.z - cur.z * dir.x, cur.x * dir.x + cur.z * dir.z), lim = Math.PI / 2;
-          if (Math.abs(ang) > lim) { var a2 = Math.sign(ang) * lim, ca = Math.cos(a2), sa = Math.sin(a2); dir = new THREE.Vector3(cur.x * ca - cur.z * sa, 0, cur.x * sa + cur.z * ca); }
-        }
-      }
-    }
+    // どの手順も、その矢印の後ろから見る。向きが大きく変わるときは moveTo が見ている先のまわりを回り込む
     if (dir) {
       // 進む向きの後ろ・左・上から見る（左は、上から見て進む向きの左）
       var left = new THREE.Vector3(dir.z, 0, -dir.x);
