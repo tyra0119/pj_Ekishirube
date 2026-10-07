@@ -459,6 +459,39 @@ var Guide = (function () {
         segs.push(w);
       }
     }
+    // 通路の途中で大きく折り返す（135 度以上）所で区間を分ける。1 つの手順のなかで往きと帰りが重なると、
+    // 立体図の矢印が重なり、文も「通路を約70m 進む」だけで折り返しが伝わらない
+    var split = [];
+    segs.forEach(function (s) {
+      if (s.kind !== 'walk') { split.push(s); return; }
+      // 直前の約 12 m の進む向き（2 回の直角で折り返す形も拾えるように）と比べる
+      var cur = { kind: 'walk', edges: [], steps: 0 }, hist = [], run = 0;
+      function recentDir() {
+        var sx = 0, sy = 0, acc = 0;
+        for (var k = hist.length - 1; k >= 0 && acc < 12; k--) { sx += hist[k][0]; sy += hist[k][1]; acc += hist[k][2]; }
+        var l = Math.hypot(sx, sy);
+        return l > 3 ? [sx / l, sy / l] : null;
+      }
+      s.edges.forEach(function (e) {
+        var a = st.nodes[e.a], b = st.nodes[e.b], dx = b[0] - a[0], dy = b[1] - a[1], L = Math.hypot(dx, dy);
+        var prevDir = recentDir();
+        if (L > 0.8 && prevDir) {
+          var cos = (dx * prevDir[0] + dy * prevDir[1]) / L;
+          var rest = s.edges.slice(s.edges.indexOf(e)).reduce(function (t, x) { return t + x.len; }, 0);
+          if (cos < -0.707 && run >= 6 && rest >= 6) { // 折り返し。前後とも 6 m 以上あるときだけ分ける
+            split.push(cur);
+            cur = { kind: 'walk', edges: [], steps: 0, uturn: true };
+            run = 0;
+            hist = [];
+          }
+        }
+        if (L > 0.3) hist.push([dx, dy, L]);
+        if (e.mode === STAIR || e.mode === ESC) cur.steps++;
+        cur.edges.push(e); run += e.len;
+      });
+      split.push(cur);
+    });
+    segs = split;
     segs.forEach(function (s) {
       s.from = s.edges[0].a; s.to = s.edges[s.edges.length - 1].b;
       s.z0 = st.nodes[s.from][2]; s.z1 = st.nodes[s.to][2];
@@ -503,9 +536,9 @@ var Guide = (function () {
       if (s.kind === 'walk') {
         var m = Math.max(5, Math.round(s.len / 5) * 5);
         var onPlat = stationMeta(st).platLevels[s.z0];
-        var t = (onPlat ? 'ホーム上を' : '通路を') + '約' + m + 'm 進む';
+        var t = (s.uturn ? '折り返して、' : '') + (onPlat ? 'ホーム上を' : '通路を') + '約' + m + 'm 進む';
         var d = s.steps ? '途中に数段の段差があります。' : '';
-        steps.push({ kind: 'walk', icon: 'walk', title: t, detail: d, z: s.z0, len: s.len });
+        steps.push({ kind: 'walk', icon: s.uturn ? 'uturn' : 'walk', title: t, detail: d, z: s.z0, len: s.len });
       } else if (s.kind === 'gate') {
         var enter = from.type === 'exit';
         steps.push({ kind: 'gate', icon: 'gate', enter: enter, z: s.z0,
@@ -1238,6 +1271,7 @@ var View3D = (function () {
 
   var ICON = {
     walk: '<path d="M3 10h13M12 5l5 5-5 5"/>',
+    uturn: '<path d="M14 17V8a4 4 0 0 0-8 0v9M3 13.5l3 3.5 3-3.5"/>',
     stairUp: '<path d="M2 17h4v-4h4V9h4V5h4"/>',
     stairDown: '<path d="M2 5h4v4h4v4h4v4h4"/>',
     escUp: '<path d="M2 16h4l8-10h4"/><path d="M6 16l8-10" opacity=".45"/>',
@@ -1374,6 +1408,7 @@ var View3D = (function () {
     }
     if (s.icon === 'train') return '<div class="ico train">' + icon('train') + '</div>';
     if (s.icon === 'walk') return '<div class="ico">' + icon('walk') + '</div>';
+    if (s.icon === 'uturn') return '<div class="ico">' + icon('uturn') + '</div>';
     if (s.icon === 'gate') return '<div class="ico gate">' + icon('gate') + '</div>';
     if (s.icon === 'ev') return '<div class="ico v">' + icon('ev') + '</div>';
     if (s.icon === 'esc') return '<div class="ico v">' + icon(s.up ? 'escUp' : 'escDown') + '</div>';
