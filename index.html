@@ -21,6 +21,8 @@
   --faint: #e5e8ed;
   --oedo: #cf3366;
   --oedo-soft: #fbe3ea;
+  --sel: #1f6feb;
+  --sel-soft: #e2ecff;
   --exit: #f5c400;
   --exit-ink: #131313;
   --sign: #1c2333;
@@ -39,7 +41,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --bg: #111319; --surface: #1a1d25; --ink: #eceef3; --muted: #a2a9b8; --line: #2f3440; --faint: #232731;
-    --oedo: #ff5d8c; --oedo-soft: #3b1d29; --sign: #0b0e15; --walk: #737b8c; --warn: #f2b45a; --warn-soft: #33270f;
+    --oedo: #ff5d8c; --oedo-soft: #3b1d29; --sel: #4d8fff; --sel-soft: #16233d; --sel: #4d8fff; --sel-soft: #16233d; --sign: #0b0e15; --walk: #737b8c; --warn: #f2b45a; --warn-soft: #33270f;
     --stage: #0c0e13;
     --road: #262b35;
     --sidewalk: #2f3541;
@@ -130,7 +132,8 @@ ol.steps { list-style: none; margin: 6px 0 0; padding: 0; display: grid; }
 ol.steps li { display: grid; grid-template-columns: 26px 40px minmax(0, 1fr); gap: 10px; padding: 10px 6px; border-radius: 8px;
   position: relative; }
 ol.steps li + li { border-top: 1px solid var(--faint); }
-ol.steps li.on { background: var(--oedo-soft); }
+ol.steps li.on { background: var(--sel-soft); box-shadow: inset 4px 0 0 var(--sel); }
+ol.steps li.on .no { color: var(--sel); font-weight: 700; }
 ol.steps li.minor { padding-block: 6px; }
 .no { font-family: var(--f-num); font-weight: 600; color: var(--muted); font-size: 15px; padding-top: 8px; text-align: right; }
 .ico { width: 40px; height: 40px; border-radius: 8px; display: grid; place-items: center; background: var(--faint); color: var(--ink); }
@@ -163,8 +166,7 @@ footer a { color: inherit; }
 .route { fill: none; stroke: var(--oedo); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
 .route.walk { stroke: var(--walk); stroke-width: 3; }
 .seg-g { cursor: default; }
-.seg-g.on .route { stroke-width: 7; }
-.seg-g.on .route.walk { stroke: var(--ink); }
+.seg-g.on .route, .seg-g.on .route.walk { stroke: var(--sel); stroke-width: 7; }
 .dist { fill: var(--muted); font-size: 11px; font-family: var(--f-num); font-weight: 600; }
 .evbox { fill: var(--surface); stroke: var(--oedo); stroke-width: 2; }
 .mark-lbl { fill: var(--ink); font-size: 12px; font-weight: 700; font-family: var(--f-body); }
@@ -573,7 +575,8 @@ var View3D = (function () {
   function css(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || '#888888'; }
   function V(st, i, lift) { var n = st.nodes[i]; return new THREE.Vector3(n[0], n[2] * LV + (lift || 0), -n[1]); }
 
-  function label(text, bg, fg, h, anchorX) {
+  var labels = []; // 手順を選んだときに薄くする、地図の上のラベル
+  function label(text, bg, fg, px, anchorX) {
     var c = document.createElement('canvas'), ctx = c.getContext('2d'), fs = 44, padX = bg ? 18 : 4;
     var font = '700 ' + fs + 'px "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", sans-serif';
     ctx.font = font;
@@ -588,7 +591,9 @@ var View3D = (function () {
     }
     ctx.fillStyle = fg; ctx.textBaseline = 'middle'; ctx.fillText(text, padX, hh / 2 + 2);
     var tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter;
-    var s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true }));
+    // 寄っても引いても画面上で同じ大きさ（px）に見えるよう、距離で大きさを変えない
+    var s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
+    var h = px / ((el && el.clientHeight) || 440) * 2 * Math.tan(THREE.MathUtils.degToRad(19));
     s.scale.set(h * w / hh, h, 1);
     s.center.set(anchorX == null ? 0.5 : anchorX, 0);
     s.renderOrder = 10;
@@ -649,7 +654,7 @@ var View3D = (function () {
     dispose();
     scene = new THREE.Scene();
     scene.background = new THREE.Color(css('--stage'));
-    segTubes = []; netMeshes = []; anim = null; play = null;
+    segTubes = []; netMeshes = []; labels = []; anim = null; play = null;
 
     var xs = st.nodes.map(function (n) { return n[0]; }), ys = st.nodes.map(function (n) { return n[1]; });
     var rawSpan = Math.max(Math.max.apply(null, xs) - Math.min.apply(null, xs), Math.max.apply(null, ys) - Math.min.apply(null, ys));
@@ -714,14 +719,14 @@ var View3D = (function () {
         m.rotation.y = rotY;
         scene.add(m);
         if (hl) {
-          var lb = label('前から' + c + '両目', cOedo, '#ffffff', span * 0.04);
+          var lb = label('前から' + c + '両目', cOedo, '#ffffff', 17); labels.push(lb);
           lb.position.set(m.position.x, y + 3, m.position.z); scene.add(lb);
         }
       }
       // 進行方向
       var front = new THREE.Vector3(p.cx + p.ax * p.max, y + 1, -(p.cy + p.ay * p.max));
       scene.add(new THREE.ArrowHelper(axis, front, 16, new THREE.Color(cInk).getHex(), 5, 3.5));
-      var dl = label((p.next ? p.next + '方面' : '終点') + 'へ', null, cInk, span * 0.035);
+      var dl = label((p.next ? p.next + '方面' : '終点') + 'へ', null, cInk, 15); labels.push(dl);
       dl.position.copy(front.clone().add(axis.clone().multiplyScalar(20))); scene.add(dl);
     });
 
@@ -731,7 +736,7 @@ var View3D = (function () {
       var ids = meta.exits[name], p = new THREE.Vector3();
       ids.forEach(function (i) { p.add(V(st, i)); }); p.divideScalar(ids.length);
       var chosen = (from.type === 'exit' && from.id === name) || (to.type === 'exit' && to.id === name);
-      var lb = label(name, cExit, '#131313', span * (chosen ? 0.045 : 0.03));
+      var lb = label(name, cExit, '#131313', chosen ? 19 : 14); labels.push(lb);
       lb.material.opacity = chosen ? 1 : 0.7;
       lb.position.set(p.x, p.y + 2, p.z); scene.add(lb);
     });
@@ -742,7 +747,7 @@ var View3D = (function () {
     levels[0] = 1;
     Object.keys(levels).map(Number).forEach(function (z) {
       if (Math.abs(z - Math.round(z)) > 0.01) return;
-      var lb = label(Guide.levelName(st, z), null, cMuted, span * 0.03, 1);
+      var lb = label(Guide.levelName(st, z), null, cMuted, 13, 1);
       lb.position.set(box.min.x - 6, z * LV, mid.z); scene.add(lb);
     });
 
@@ -763,36 +768,40 @@ var View3D = (function () {
       new THREE.MeshBasicMaterial({ color: cOedo }));
     scene.add(routeTube);
 
-    // 手順ごとの強調（普段は隠す）: 黄色の管に黒い縁、進む向きの矢印、番号と手順の文
-    var HL = '#f5c400', EDGE = '#15181f';
+    // 手順ごとの強調（普段は隠す）: 青い管に白い縁、進む向きの矢印、番号と手順の文。
+    // 青は左の一覧・横から見た図の選択と同じ色。路線のマゼンタ・出入口の黄色と混ざらない
+    var HL = css('--sel'), EDGE = '#ffffff';
     g.segs.forEach(function (s, k) {
       var sp = dedupe([V(st, s.from, 0.8)].concat(s.edges.map(function (e) { return V(st, e.b, 0.8); })));
       if (sp.length < 2) return;
       var curve = polyCurve(sp), n = Math.min(800, sp.length * 12);
       var grp = new THREE.Group();
-      var edge = new THREE.Mesh(new THREE.TubeGeometry(curve, n, 3.0, 10, false), new THREE.MeshBasicMaterial({ color: EDGE, side: THREE.BackSide }));
-      var core = new THREE.Mesh(new THREE.TubeGeometry(curve, n, 2.1, 10, false), new THREE.MeshBasicMaterial({ color: HL }));
+      var edge = new THREE.Mesh(new THREE.TubeGeometry(curve, n, 4.4, 10, false), new THREE.MeshBasicMaterial({ color: EDGE, side: THREE.BackSide }));
+      var core = new THREE.Mesh(new THREE.TubeGeometry(curve, n, 3.2, 10, false), new THREE.MeshBasicMaterial({ color: HL }));
       edge.renderOrder = 5; core.renderOrder = 6;
       grp.add(edge, core);
       // 矢印（終わりの向き）
       var end = sp[sp.length - 1], dir = end.clone().sub(sp[sp.length - 2]).normalize();
       var q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-      var coneE = new THREE.Mesh(new THREE.ConeGeometry(5.2, 10, 16), new THREE.MeshBasicMaterial({ color: EDGE }));
-      var coneC = new THREE.Mesh(new THREE.ConeGeometry(4.0, 8, 16), new THREE.MeshBasicMaterial({ color: HL }));
+      var coneE = new THREE.Mesh(new THREE.ConeGeometry(7.4, 14, 16), new THREE.MeshBasicMaterial({ color: EDGE }));
+      var coneC = new THREE.Mesh(new THREE.ConeGeometry(5.8, 11, 16), new THREE.MeshBasicMaterial({ color: HL }));
       [coneE, coneC].forEach(function (c, ci) {
-        c.quaternion.copy(q); c.position.copy(end).add(dir.clone().multiplyScalar(ci ? 4.6 : 4)); grp.add(c);
+        c.quaternion.copy(q); c.position.copy(end).add(dir.clone().multiplyScalar(ci ? 6.4 : 5.6)); grp.add(c);
       });
       // 始まりの印
-      var startBall = new THREE.Mesh(new THREE.SphereGeometry(3.2, 16, 12), new THREE.MeshBasicMaterial({ color: EDGE }));
-      startBall.position.copy(sp[0]); grp.add(startBall);
+      [[5.2, EDGE], [4.0, HL]].forEach(function (b) {
+        var ball = new THREE.Mesh(new THREE.SphereGeometry(b[0], 16, 12), new THREE.MeshBasicMaterial({ color: b[1] }));
+        ball.position.copy(sp[0]); ball.renderOrder = 7; grp.add(ball);
+      });
       // 番号と手順の文
       var step = g.steps[k + 1], ctr = new THREE.Box3().setFromPoints(sp).getCenter(new THREE.Vector3());
       if (step) {
-        var lb = label((k + 2) + '. ' + step.title, EDGE, '#ffffff', span * 0.04);
+        var lb = label((k + 2) + '. ' + step.title, HL, '#ffffff', 22);
         lb.position.set(ctr.x, Math.max.apply(null, sp.map(function (p) { return p.y; })) + LV * 0.5, ctr.z);
         grp.add(lb);
       }
       grp.visible = false; grp.userData.step = k + 1; grp.userData.center = ctr;
+      grp.userData.size = new THREE.Box3().setFromPoints(sp).getSize(new THREE.Vector3()).length();
       segTubes.push(grp); scene.add(grp);
     });
 
@@ -803,7 +812,7 @@ var View3D = (function () {
       ball.position.copy(p); scene.add(ball);
       if (ep.type === 'plat') {
         var pl = st.plats.filter(function (x) { return x.id === ep.id; })[0];
-        var lb = label(pl.code + '番線', cOedo, '#ffffff', span * 0.045);
+        var lb = label(pl.code + '番線', cOedo, '#ffffff', 18); labels.push(lb);
         lb.position.set(p.x, p.y + LV * 0.9, p.z); scene.add(lb);
       }
     });
@@ -856,6 +865,7 @@ var View3D = (function () {
     // 選んでいる間は、ほかの経路と通路網を薄くし、歩く人を隠す
     if (routeTube) { routeTube.material.transparent = on; routeTube.material.opacity = on ? 0.25 : 1; routeTube.material.needsUpdate = true; }
     netMeshes.forEach(function (m) { m.material.opacity = on ? m.userData.base * 0.45 : m.userData.base; });
+    labels.forEach(function (l) { l.material.opacity = on ? 0.25 : 1; });
     if (dot) dot.visible = !on || !!play;
   }
 
@@ -865,7 +875,7 @@ var View3D = (function () {
     var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
     if (!t) return;
     play = null;
-    var off = camera.position.clone().sub(controls.target).normalize().multiplyScalar(Math.max(70, home.dist * 0.45));
+    var off = camera.position.clone().sub(controls.target).normalize().multiplyScalar(Math.max(160, t.userData.size * 3, home.dist * 0.6));
     moveTo(t.userData.center.clone().add(off), t.userData.center.clone());
   }
 
