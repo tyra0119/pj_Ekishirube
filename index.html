@@ -1440,7 +1440,7 @@ var View3D = (function () {
       var word = c.s.mode === 5 ? 'このエレベーター' : c.s.mode === 4 ? 'このエスカレーター' : 'この階段';
       var anchor = c.x < L + 60 ? 'start' : c.x > W - R - 60 ? 'end' : 'middle';
       h.push('<path d="M' + c.x + ' ' + (platY + platH + 2) + 'v12" stroke="var(--oedo)" stroke-width="2"/>');
-      h.push('<text class="call" x="' + c.x + '" y="' + (platY + platH + 30) + '" text-anchor="' + anchor + '">' + word + '（' + (c.s.up ? '上り' : '下り') + '）</text>');
+      h.push('<text class="call" x="' + c.x + '" y="' + (platY + platH + 30) + '" text-anchor="' + anchor + '">' + word + '</text>'); // 上り・下りは付けない（ホームへ行く人と出る人で逆になる。向きは手順とイラストで分かる）
     });
     // 凡例
     var ly = platY + platH + 56;
