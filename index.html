@@ -673,6 +673,8 @@ var View3D = (function () {
   var LV = 7;
   var depth = 0.5, lastArgs = null; // 深さの倍率（利用者が調整）と、作り直し用の引数
   var showCity = true; // 地上の街並み（PLATEAU の建物・道路）
+  var arrowStyle = 'band'; // 案内の矢印の形: band（帯）／tube（細い円柱）
+  try { if (localStorage.getItem('ekishirube.arrow') === 'tube') arrowStyle = 'tube'; } catch (e) {}
   try { if (localStorage.getItem('ekishirube.city') === '0') showCity = false; } catch (e) {}
   try { var saved = parseFloat(localStorage.getItem('ekishirube.depth2')); if (saved > 0) depth = saved; } catch (e) {}
   var cityAlpha = 0.15; // 街並みの濃さ（0〜1。利用者が調整）
@@ -943,6 +945,38 @@ var View3D = (function () {
     return s;
   }
 
+  var tubeTexs = {};
+  function tubeTexture(color) { // 円柱用の模様（u が進む向き）
+    if (tubeTexs[color]) return tubeTexs[color];
+    var c = document.createElement('canvas'); c.width = 64; c.height = 64;
+    var x = c.getContext('2d');
+    x.fillStyle = color; x.fillRect(0, 0, 64, 64);
+    x.strokeStyle = '#ffffff'; x.lineWidth = 9; x.lineCap = 'round'; x.lineJoin = 'round';
+    x.beginPath(); x.moveTo(20, 14); x.lineTo(42, 32); x.lineTo(20, 50); x.stroke(); // 右（u の向き）を指す
+    var t = new THREE.CanvasTexture(c);
+    t.wrapS = THREE.RepeatWrapping; t.wrapT = THREE.RepeatWrapping; t.anisotropy = 4;
+    tubeTexs[color] = t;
+    return t;
+  }
+  function tubeArrow(sp, color, radius) {
+    var g = new THREE.Group(), curve = polyCurve(sp), len = curve.getLength();
+    var tex = tubeTexture(color).clone(); tex.needsUpdate = true;
+    tex.repeat.set(Math.max(1, len / (radius * 7)), 2);
+    var mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: true });
+    var tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.min(800, sp.length * 16), radius, 12, false), mat);
+    tube.onBeforeRender = function (r) { r.clearDepth(); }; // 建物や通路網には隠されない（自分どうしは奥行きを比べる）
+    tube.renderOrder = 11;
+    var end = sp[sp.length - 1], dir = curve.getTangentAt(1).normalize();
+    var cone = new THREE.Mesh(new THREE.ConeGeometry(radius * 2.4, radius * 5.5, 20), new THREE.MeshBasicMaterial({ color: color, transparent: true }));
+    cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+    cone.position.copy(end).add(dir.clone().multiplyScalar(radius * 2.2)); cone.renderOrder = 11;
+    var ball = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.8, 16, 12), new THREE.MeshBasicMaterial({ color: color, transparent: true }));
+    ball.position.copy(sp[0]); ball.renderOrder = 11;
+    g.add(tube, cone, ball);
+    g.userData.tex = tex;
+    return g;
+  }
+
   function polyCurve(pts) {
     var path = new THREE.CurvePath();
     for (var i = 1; i < pts.length; i++) path.add(new THREE.LineCurve3(pts[i - 1], pts[i]));
@@ -1126,6 +1160,8 @@ var View3D = (function () {
       new THREE.MeshBasicMaterial({ color: cOedo }));
     scene.add(routeTube);
 
+    var rb0 = new THREE.Box3().setFromPoints(pts); rb0.expandByScalar(18);
+    var home0 = rb0.getSize(new THREE.Vector3()).length() / 2 / Math.sin(THREE.MathUtils.degToRad(19)) * 0.95;
     // 手順ごとの強調（普段は隠す）: 床に敷いた青い帯に白い「︿」が進む向きへ流れる（床の誘導線のように）。
     // 青は左の一覧・横から見た図の選択と同じ色。路線のマゼンタ・出入口の黄色と混ざらない
     var HL = css('--sel');
@@ -1137,8 +1173,17 @@ var View3D = (function () {
       var curve = polyCurve(sp), n = Math.min(800, sp.length * 12);
       var grp = new THREE.Group();
       // 改札は、実際の自動改札機の「通れる」表示と同じ緑。ほかは選んだ手順の青
-      var rb = ribbonAlong(sp, s.kind === 'gate' ? css('--gate') : HL);
-      grp.add(rb); grp.userData.ribbon = rb;
+      var acol = s.kind === 'gate' ? css('--gate') : HL;
+      if (arrowStyle === 'tube') {
+        // 太さは、その区間に寄ったときに画面上で 10 px くらいになるように
+        var size = new THREE.Box3().setFromPoints(sp).getSize(new THREE.Vector3()).length();
+        var focusDist = Math.max(90, size * 3.2, home0 * 0.3);
+        var ta = tubeArrow(sp, acol, Math.max(0.35, focusDist * 2 * Math.tan(THREE.MathUtils.degToRad(19)) / ((el && el.clientHeight) || 440) * 5));
+        grp.add(ta); grp.userData.tubeTex = ta.userData.tex;
+      } else {
+        var rb = ribbonAlong(sp, acol);
+        grp.add(rb); grp.userData.ribbon = rb;
+      }
       if (s.kind === 'gate') { // 改札を通り抜ける人
         var wk = personSprite(css('--gate'), 46);
         grp.add(wk); grp.userData.walker = wk; grp.userData.walkCurve = polyCurve(sp);
@@ -1259,7 +1304,7 @@ var View3D = (function () {
     var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
     segTubes.forEach(function (s) { s.visible = s === t; });
     sel = null;
-    if (t) sel = { i: i, lo: t.userData.lo, hi: t.userData.hi, curve: t.userData.curve, ring: t.userData.vert ? t.userData.start : null, ribbon: t.userData.ribbon, walker: t.userData.walker, walkCurve: t.userData.walkCurve };
+    if (t) sel = { i: i, lo: t.userData.lo, hi: t.userData.hi, curve: t.userData.curve, ring: t.userData.vert ? t.userData.start : null, ribbon: t.userData.ribbon, tubeTex: t.userData.tubeTex, walker: t.userData.walker, walkCurve: t.userData.walkCurve };
     else if (i >= 0 && lastArgs && routePts.length) {
       // 出発・到着の手順は、その場所に波紋だけ出す
       var g = lastArgs[1], last = g.steps.length - 1;
@@ -1374,6 +1419,7 @@ var View3D = (function () {
     if (sel && sel.ribbon) updateRibbon(sel.ribbon);
     if (sel && sel.walker) sel.walker.position.copy(sel.walkCurve.getPointAt(reduce ? 0.5 : (now / 2600) % 1)); // 改札を通り抜ける人
     if (sel && sel.ribbon && !reduce) sel.ribbon.material.map.offset.y = -((now / 1000) * 1.2 % 1); // 「︿」を進む向きへ流す
+    if (sel && sel.tubeTex && !reduce) sel.tubeTex.offset.x = -((now / 1000) * 1.2 % 1);
     if (ripple && ripple.visible) {
       var ph = reduce ? 0.4 : (now / 1500) % 1;
       ripple.scale.setScalar(3 + ph * 9);
@@ -1402,6 +1448,16 @@ var View3D = (function () {
   }
 
   // 街並みの表示を切り替えて作り直す（見ている位置はそのまま）
+  function setArrowStyle(s) {
+    arrowStyle = s;
+    try { localStorage.setItem('ekishirube.arrow', s); } catch (e) {}
+    if (!lastArgs || !camera) return;
+    var pos = camera.position.clone(), tgt = controls.target.clone(), keep = sel ? sel.i : -1;
+    build.apply(null, lastArgs.concat([true]));
+    camera.position.copy(pos); controls.target.copy(tgt); controls.update();
+    if (keep >= 0) highlight(keep);
+  }
+
   function setCity(on) {
     showCity = on;
     try { localStorage.setItem('ekishirube.city', on ? '1' : '0'); } catch (e) {}
@@ -1417,7 +1473,7 @@ var View3D = (function () {
     applyOpacity();
   }
 
-  return { build: build, setDepth: setDepth, setCity: setCity, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
+  return { build: build, setArrowStyle: setArrowStyle, get arrowStyle() { return arrowStyle; }, setDepth: setDepth, setCity: setCity, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
     set onStep(fn) { onStep = fn; } };
 })();
 
@@ -1523,6 +1579,7 @@ var View3D = (function () {
           '<section class="panel p3d" aria-labelledby="h-3d"><h2 id="h-3d">立体で見る</h2><p class="hint">ドラッグで回転、ホイールやピンチで拡大します。右上の方位マークを押すと北が上になります。地上の建物は実際の高さです。手順を押すとその場所に寄ります。高さは見やすいように強調していて、左下の「深さ」で変えられます。</p>' +
             '<div class="stage" id="stage"><div class="views">' +
               '<button type="button" data-view="oblique">斜めから</button><button type="button" data-view="side">横から</button><button type="button" data-view="top">真上から</button><button type="button" data-view="play">歩く様子</button>' +
+              '<button type="button" id="arrow-toggle" title="案内の矢印の形を切り替える">矢印: ' + (View3D.arrowStyle === 'tube' ? '円柱' : '帯') + '</button>' +
               (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
             '</div><div class="knobs"><label class="depth" for="depth">深さ<input type="range" id="depth" min="0.3" max="3" step="0.1" value="' + View3D.depth + '"><output id="depth-v">×' + View3D.depth.toFixed(1) + '</output></label>' +
             (View3D.hasCity ? '<label class="depth" for="city-a" id="city-a-wrap"' + (View3D.city ? '' : ' hidden') + '>街並みの濃さ<input type="range" id="city-a" min="0" max="1" step="0.05" value="' + View3D.cityAlpha + '"><output id="city-a-v">' + Math.round(View3D.cityAlpha * 100) + '%</output></label>' : '') +
@@ -1538,6 +1595,11 @@ var View3D = (function () {
       View3D.setCity(on);
       this.setAttribute('aria-pressed', on); this.textContent = '街並み ' + (on ? '表示中' : '非表示');
       if ($('city-a-wrap')) $('city-a-wrap').hidden = !on;
+    });
+    $('arrow-toggle').addEventListener('click', function () {
+      var s = View3D.arrowStyle === 'tube' ? 'band' : 'tube';
+      View3D.setArrowStyle(s);
+      this.textContent = '矢印: ' + (s === 'tube' ? '円柱' : '帯');
     });
     if ($('city-a')) $('city-a').addEventListener('input', function () {
       var a = parseFloat(this.value);
