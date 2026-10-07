@@ -1448,8 +1448,8 @@ var View3D = (function () {
     if (anim) {
       var k = Math.min(1, (now - anim.s) / anim.d), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
       controls.target.lerpVectors(anim.t0, anim.t1, e);
-      var r = anim.a.r + (anim.b.r - anim.a.r) * e, az = anim.a.az + anim.daz * e, el = anim.a.el + (anim.b.el - anim.a.el) * e;
-      camera.position.set(controls.target.x + r * Math.cos(el) * Math.sin(az), controls.target.y + r * Math.sin(el), controls.target.z + r * Math.cos(el) * Math.cos(az));
+      var r = anim.a.r + (anim.b.r - anim.a.r) * e, az = anim.a.az + anim.daz * e, elv = anim.a.el + (anim.b.el - anim.a.el) * e; // el は描く要素なので別名
+      camera.position.set(controls.target.x + r * Math.cos(elv) * Math.sin(az), controls.target.y + r * Math.sin(elv), controls.target.z + r * Math.cos(elv) * Math.cos(az));
       if (k >= 1) anim = null;
     }
     if (routeCurve && dot) {
