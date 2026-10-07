@@ -1199,6 +1199,9 @@ var View3D = (function () {
       grp.visible = false; grp.userData.step = k + 1; grp.userData.center = ctr; grp.userData.curve = curve;
       grp.userData.lo = Math.min(s.z0, s.z1); grp.userData.hi = Math.max(s.z0, s.z1); grp.userData.vert = s.kind === 'vert'; grp.userData.start = V(st, s.from, 0.8); // 波紋は昇降設備の入口に
       grp.userData.size = new THREE.Box3().setFromPoints(sp).getSize(new THREE.Vector3()).length();
+      // 進む向き（水平）。始まりから終わりへ。エレベーターなど水平に動かない区間は無し
+      var dv = new THREE.Vector3(sp[sp.length - 1].x - sp[0].x, 0, sp[sp.length - 1].z - sp[0].z);
+      grp.userData.dir = dv.length() > 2 ? dv.normalize() : null;
       segTubes.push(grp); scene.add(grp);
     });
 
@@ -1267,8 +1270,9 @@ var View3D = (function () {
   }
 
   function moveTo(pos, target, instant) {
+    var dur = typeof instant === 'number' ? instant : 650; if (typeof instant === 'number') instant = false;
     if (instant || reduce) { camera.position.copy(pos); controls.target.copy(target); controls.update(); anim = null; return; }
-    anim = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos, t1: target, s: performance.now(), d: 650 };
+    anim = { p0: camera.position.clone(), t0: controls.target.clone(), p1: pos, t1: target, s: performance.now(), d: dur };
   }
 
   function setView(kind, instant) {
@@ -1382,8 +1386,16 @@ var View3D = (function () {
     else if (sel && sel.ring) { center = sel.ring; size = 20; } // 出発・到着
     else return;
     play = null;
-    var off = camera.position.clone().sub(controls.target).normalize().multiplyScalar(Math.max(90, size * 3.2, home.dist * 0.3)); // 短い区間は近くに、長い区間は全体が入るように
-    moveTo(center.clone().add(off), center.clone());
+    var D = Math.max(90, size * 3.2, home.dist * 0.3); // 短い区間は近くに、長い区間は全体が入るように
+    var dir = t && t.userData.dir, off;
+    if (dir) {
+      // 進む向きの後ろ・左・上から見る（左は、上から見て進む向きの左）
+      var left = new THREE.Vector3(dir.z, 0, -dir.x);
+      off = dir.clone().multiplyScalar(-0.62).add(left.multiplyScalar(0.38)).add(new THREE.Vector3(0, 0.68, 0)).normalize().multiplyScalar(D);
+    } else {
+      off = camera.position.clone().sub(controls.target).normalize().multiplyScalar(D); // 向きが決まらない区間は、いまの向きのまま寄る
+    }
+    moveTo(center.clone().add(off), center.clone(), 900);
   }
 
   function stepAt(u) {
