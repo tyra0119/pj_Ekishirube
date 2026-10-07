@@ -700,32 +700,41 @@ var View3D = (function () {
     geo.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(n * 4), 2));
     geo.setIndex(idx);
     var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: chevronTexture(), side: THREE.DoubleSide, depthTest: false }));
-    m.renderOrder = 6; m.frustumCulled = false; m.userData.pts = pts;
+    m.renderOrder = 11; m.frustumCulled = false; m.userData.pts = pts; // 札（10）より手前、手順のラベル（12）より奥
     return m;
   }
+  // 帯を画面の上で組み立てる: 点を画面に写し、画面上の進む向きの左右へ RIBBON_PX の幅で広げ、同じ奥行きで 3D に戻す。
+  // 3D の向きから幅を決めると、通路を奥へ見る角度でねじれていた。「︿」の間隔も画面上の長さで決める（奥へ向かう区間でも詰まらない）
   function updateRibbon(m) {
     var pts = m.userData.pts, n = pts.length, pos = m.geometry.attributes.position, uv = m.geometry.attributes.uv;
-    var H = (el && el.clientHeight) || 440, k = RIBBON_PX * 2 * Math.tan(THREE.MathUtils.degToRad(19)) / H;
-    var prev = null, dist = 0, ws = [], i, t = new THREE.Vector3(), view = new THREE.Vector3(), perp = new THREE.Vector3();
-    for (i = 0; i < n; i++) ws.push(k * camera.position.distanceTo(pts[i]));
-    var wAvg = ws.reduce(function (a, b) { return a + b; }, 0) / n, REP = wAvg * 1.5; // 「︿」の間隔は帯の太さに合わせる
-    for (i = 0; i < n; i++) {
-      var p = pts[i];
-      t.set(0, 0, 0);
-      if (i > 0) t.add(p.clone().sub(pts[i - 1]).normalize());
-      if (i < n - 1) t.add(pts[i + 1].clone().sub(p).normalize());
-      view.copy(camera.position).sub(p).normalize();
-      perp.crossVectors(t, view);
-      if (perp.lengthSq() < 1e-6) perp.copy(prev || new THREE.Vector3(1, 0, 0)); else perp.normalize();
-      prev = perp.clone();
-      if (i > 0) dist += p.distanceTo(pts[i - 1]);
-      var o = perp.multiplyScalar(ws[i] / 2);
-      pos.setXYZ(i * 2, p.x + o.x, p.y + o.y, p.z + o.z);
-      pos.setXYZ(i * 2 + 1, p.x - o.x, p.y - o.y, p.z - o.z);
+    var W = (el && el.clientWidth) || 600, H = (el && el.clientHeight) || 440, half = RIBBON_PX / 2, REP = RIBBON_PX * 1.4;
+    var scr = pts.map(function (p) {
+      var q = p.clone().project(camera);
+      return { x: (q.x + 1) / 2 * W, y: (1 - q.y) / 2 * H, z: q.z };
+    });
+    var prevN = null, dist = 0, tmp = new THREE.Vector3();
+    for (var i = 0; i < n; i++) {
+      var s = scr[i], tx = 0, ty = 0;
+      [[i - 1, i], [i, i + 1]].forEach(function (ab) {
+        if (ab[0] < 0 || ab[1] >= n) return;
+        var dx = scr[ab[1]].x - scr[ab[0]].x, dy = scr[ab[1]].y - scr[ab[0]].y, L = Math.hypot(dx, dy);
+        if (L > 0.5) { tx += dx / L; ty += dy / L; }
+      });
+      var tl = Math.hypot(tx, ty), nx, ny;
+      if (tl > 1e-3) { nx = -ty / tl; ny = tx / tl; prevN = [nx, ny]; }
+      else if (prevN) { nx = prevN[0]; ny = prevN[1]; }   // 画面上で動かない点（真上から見た縦の区間）は前の向き
+      else { nx = 1; ny = 0; }
+      if (i > 0) dist += Math.hypot(s.x - scr[i - 1].x, s.y - scr[i - 1].y);
+      [[1, 0], [-1, 1]].forEach(function (sg) {
+        var px = s.x + nx * half * sg[0], py = s.y + ny * half * sg[0];
+        tmp.set(px / W * 2 - 1, 1 - py / H * 2, s.z).unproject(camera);
+        pos.setXYZ(i * 2 + sg[1], tmp.x, tmp.y, tmp.z);
+      });
       uv.setXY(i * 2, 0, dist / REP); uv.setXY(i * 2 + 1, 1, dist / REP);
     }
     pos.needsUpdate = true; uv.needsUpdate = true;
   }
+
 
   function polyCurve(pts) {
     var path = new THREE.CurvePath();
@@ -920,7 +929,7 @@ var View3D = (function () {
       // 番号と手順の文
       var step = g.steps[k + 1], ctr = new THREE.Box3().setFromPoints(sp).getCenter(new THREE.Vector3());
       if (step) {
-        var lb = label((k + 2) + '. ' + step.title, HL, '#ffffff', 22, null, 100); lb.userData.step = true; labels.push(lb);
+        var lb = label((k + 2) + '. ' + step.title, HL, '#ffffff', 22, null, 100); lb.userData.step = true; lb.renderOrder = 12; labels.push(lb);
         lb.position.set(ctr.x, Math.max.apply(null, sp.map(function (p) { return p.y; })) + LV * 0.5, ctr.z);
         grp.add(lb);
       }
