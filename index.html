@@ -1275,7 +1275,9 @@ var View3D = (function () {
     if (!home) return;
     play = null;
     if (kind === 'play') {
-      play = { s: performance.now(), d: Math.max(8000, total * 55) };
+      // 実際にかかる時間の 5 倍速（大門 A3 → 4 番線の約 5 分なら約 60 秒）。最短 15 秒
+      var realSec = lastArgs ? lastArgs[1].minutes * 60 : total;
+      play = { s: performance.now(), d: Math.max(15000, realSec * 1000 / 5) };
       return;
     }
     moveTo(viewPos(kind), home.center.clone(), instant);
