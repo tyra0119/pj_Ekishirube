@@ -1416,6 +1416,9 @@ var View3D = (function () {
       var cur = controls.target.clone().sub(camera.position); cur.y = 0;
       if (cur.lengthSq() > 1e-6) {
         cur.normalize();
+        // いまの視線は進む向きから左後ろへずらした分だけ回っているので、その分を戻して「いま見ている進む向き」にする
+        var b0 = -Math.atan2(0.38, 0.62), cb = Math.cos(b0), sb = Math.sin(b0);
+        cur = new THREE.Vector3(cur.x * cb - cur.z * sb, 0, cur.x * sb + cur.z * cb);
         var walkLen = t.userData.walkLen || size;
         if (walkLen < 10) dir = cur.clone();
         else {
