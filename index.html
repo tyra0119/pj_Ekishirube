@@ -527,8 +527,8 @@ var Guide = (function () {
     if (toPlat) {
       boardPlat = toPlat;
       boardCar = carOf(toPlat, st.nodes[r.end]);
-      steps.push({ kind: 'end', icon: 'train', title: platLabel(st, toPlat) + 'に着く',
-        detail: 'ホームに着いた場所は、進行方向の前から' + boardCar + '両目付近です。' + (toPlat.hs.length ? '（' + toPlat.hs.join('・') + '行き）' : ''),
+      steps.push({ kind: 'end', icon: 'train', title: platLabel(st, toPlat) + 'に到着',
+        detail: 'ホームに到着した場所は、進行方向の前から' + boardCar + '両目付近です。' + (toPlat.hs.length ? '（' + toPlat.hs.join('・') + '行き）' : ''),
         z: st.nodes[r.end][2], car: boardCar, plat: toPlat });
     } else {
       steps.push({ kind: 'end', icon: 'exit', title: to.id + '出入口から地上へ', detail: '', z: st.nodes[r.end][2] });
@@ -1012,7 +1012,8 @@ var View3D = (function () {
       if (sel) {
         // いま歩いている階は濃く、ほかの階は薄く
         if (u.lv) b = (u.lv[1] >= sel.lo - 0.01 && u.lv[0] <= sel.hi + 0.01) ? Math.min(1, b * 1.6) : b * 0.25;
-        else b = sel.hi < -0.01 ? 0 : b * 0.35; // 街並みは、地下の手順では消し、地上にかかる手順では控えめに
+        // 案内中は建物を消す（経路に被らないように）。道路は地上にかかる手順だけ、場所の手がかりとして薄く残す
+        else b = (u.city === 'road' && sel.hi > -0.01) ? b * 0.35 : 0;
       }
       m.material.opacity = b;
       m.visible = b > 0.003;
@@ -1035,7 +1036,7 @@ var View3D = (function () {
     var on = !!sel;
     if (routeTube) { routeTube.material.transparent = on; routeTube.material.opacity = on ? 0.3 : 1; routeTube.material.needsUpdate = true; }
     labels.forEach(function (l) {
-      l.material.opacity = on && !l.userData.step ? 0.35 : 1;
+      l.material.opacity = on && !l.userData.step && l.userData.pri < 50 ? 0.35 : 1; // 出発・到着の出入口と番線は薄くしない
       if (l.userData.stem) l.userData.stem.material.opacity = on ? 0.15 : 0.45;
     });
     if (ripple) { ripple.visible = !!(sel && sel.ring); if (sel && sel.ring) ripple.position.copy(sel.ring).add(new THREE.Vector3(0, 0.3, 0)); }
@@ -1289,7 +1290,7 @@ var View3D = (function () {
     if (c[4]) chips.push('<span class="chip">エスカレーター ' + c[4] + '回</span>');
     if (c[5]) chips.push('<span class="chip">エレベーター ' + c[5] + '回</span>');
     if (!c[2] && !c[4] && !c[5]) chips.push('<span class="chip">上り下りなし</span>');
-    if (g.boardCar) chips.push('<span class="chip hl">' + (from.type === 'plat' ? '降りる位置' : '着く位置') + '：前から' + g.boardCar + '両目付近</span>');
+    if (g.boardCar) chips.push('<span class="chip hl">' + (from.type === 'plat' ? '降りる位置' : '到着する位置') + '：前から' + g.boardCar + '両目付近</span>');
     return '<div class="summary">' +
       '<div class="mins">約' + g.minutes + '<small>分</small></div>' +
       '<div style="display:grid;gap:6px;min-width:0">' +
