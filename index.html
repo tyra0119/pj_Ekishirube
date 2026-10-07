@@ -117,7 +117,7 @@ select:focus-visible, button:focus-visible, input:focus-visible + span { outline
 .stage { position: relative; height: clamp(420px, 72vh, 900px); border-radius: 8px; overflow: hidden; background: var(--stage); touch-action: none; }
 .stage canvas { display: block; width: 100% !important; height: 100% !important; cursor: grab; }
 .stage canvas:active { cursor: grabbing; }
-.views { position: absolute; top: 8px; left: 8px; display: flex; gap: 6px; flex-wrap: wrap; z-index: 2; }
+.views { position: absolute; top: 8px; left: 8px; right: 70px; display: flex; gap: 6px; flex-wrap: wrap; z-index: 2; }
 .views button { font: inherit; font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line);
   background: var(--surface); color: var(--ink); cursor: pointer; }
 .views button:hover { border-color: var(--oedo); color: var(--oedo); }
@@ -127,6 +127,13 @@ select:focus-visible, button:focus-visible, input:focus-visible + span { outline
   padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
 .depth input { width: 110px; accent-color: var(--oedo); }
 .depth output { font-family: var(--f-num); font-weight: 600; min-width: 2.6em; font-variant-numeric: tabular-nums; }
+.compass { position: absolute; top: 8px; right: 8px; z-index: 2; width: 54px; height: 54px; padding: 0; border-radius: 50%;
+  border: 1px solid var(--line); background: var(--surface); cursor: pointer; display: grid; place-items: center; }
+.compass:hover { border-color: var(--sel); }
+.compass svg { width: 46px; height: 46px; transition: transform .08s linear; }
+.compass .c-n { fill: #d23a3a; }
+.compass .c-s { fill: var(--muted); }
+.compass .c-t { fill: #ffffff; font-family: var(--f-num); font-weight: 700; }
 .stage .fail { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; color: var(--muted); font-size: 13px; text-align: center; }
 ol.steps li { cursor: pointer; }
 svg { display: block; max-width: 100%; height: auto; }
@@ -219,7 +226,7 @@ footer a { color: inherit; }
   border: 1px solid var(--line); background: var(--surface); color: var(--ink); }
 .navctl button.primary { background: var(--sel); border-color: var(--sel); color: #fff; }
 .navctl button:disabled { opacity: .35; cursor: default; }
-.navkeys { font-size: 11px; color: var(--muted); text-align: center; }
+.navkeys { font-size: 11px; color: var(--muted); text-align: center; margin-top: -4px; }
 .il-floor { stroke: var(--line); stroke-width: 3; }
 .il-txt { fill: var(--ink); font-size: 15px; font-weight: 700; font-family: var(--f-body); }
 .il-sub { fill: var(--muted); font-size: 12px; font-family: var(--f-body); }
@@ -567,7 +574,7 @@ var View3D = (function () {
   var cityAlpha = 0.15; // 街並みの濃さ（0〜1。利用者が調整）
   try { var ca = parseFloat(localStorage.getItem('ekishirube.cityAlpha')); if (ca >= 0 && ca <= 1) cityAlpha = ca; } catch (e) {}
   var sel = null;       // いま選んでいる手順 { i, lo, hi, curve, ring }
-  var beads = [], ripple = null, routePts = [], lastCull = 0;
+  var ripple = null, routePts = [], lastCull = 0, compass = null, lastHeading = null;
   var renderer, scene, camera, controls, el, ro, started = false;
   var segTubes = [], netMeshes = [], routeTube, routeCurve, dot, edgeCum = [], edgeStep = [], total = 0;
   var home = null, platAxis = null, anim = null, play = null, onStep = null;
@@ -756,6 +763,15 @@ var View3D = (function () {
     if (el) ro.unobserve(el);
     el = container;
     el.appendChild(renderer.domElement);
+    var oldC = el.querySelector('.compass'); if (oldC) oldC.remove(); // 作り直すとき（深さ・街並み）に重ねない
+    compass = document.createElement('button');
+    compass.type = 'button'; compass.className = 'compass'; compass.title = '北を上にする'; compass.setAttribute('aria-label', '方位（押すと北を上にする）');
+    compass.innerHTML = '<svg viewBox="-30 -30 60 60" aria-hidden="true"><g class="compass-rose">' +
+      '<path class="c-n" d="M0 -22 L7 0 L-7 0 Z"/><path class="c-s" d="M0 22 L7 0 L-7 0 Z"/>' +
+      '<text class="c-t" x="0" y="-11" text-anchor="middle" dominant-baseline="central" font-size="9">N</text></g></svg>';
+    compass.addEventListener('click', northUp);
+    el.appendChild(compass);
+    lastHeading = null;
     ro.observe(el);
     dispose();
     scene = new THREE.Scene();
@@ -941,6 +957,24 @@ var View3D = (function () {
     if (!started) { started = true; loop(); }
   }
 
+  // いまの視点で、画面の上が地図のどの向きか → 方位マークを回す角度（度、時計回り）
+  function headingDeg() {
+    var up = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+    var f = new THREE.Vector2(up.x, up.z);
+    if (f.lengthSq() < 1e-6) { var d = controls.target.clone().sub(camera.position); f.set(d.x, d.z); }
+    f.normalize();
+    // 北は -z。画面の右は f を時計回りに 90 度回した向き
+    var n = new THREE.Vector2(0, -1), r = new THREE.Vector2(-f.y, f.x);
+    return Math.atan2(n.dot(r), n.dot(f)) * 180 / Math.PI;
+  }
+  // 見ている高さと距離はそのままで、北が画面の上になるように回る
+  function northUp() {
+    if (!home) return;
+    play = null;
+    var off = camera.position.clone().sub(controls.target), h = Math.hypot(off.x, off.z);
+    moveTo(controls.target.clone().add(new THREE.Vector3(0, off.y, Math.max(h, 1))), controls.target.clone());
+  }
+
   function viewPos(kind) {
     var c = home.center, d = home.dist;
     if (kind === 'top') return c.clone().add(new THREE.Vector3(0.01, d, 0.01));
@@ -1085,6 +1119,10 @@ var View3D = (function () {
     }
     controls.update();
     if (now - lastCull > 120) { lastCull = now; scene.updateMatrixWorld(); cullLabels(); }
+    if (compass) {
+      var hd = Math.round(-headingDeg());
+      if (hd !== lastHeading) { lastHeading = hd; compass.firstChild.style.transform = 'rotate(' + hd + 'deg)'; }
+    }
     renderer.render(scene, camera);
   }
 
@@ -1209,7 +1247,7 @@ var View3D = (function () {
       '<div class="main">' +
         '<div class="side"><div id="navbox"></div>' +
         '<section class="panel" aria-labelledby="h-steps"><h2 id="h-steps">歩く順番</h2><p class="hint">押すと、そこから 1 手順ずつ案内します。</p>' + stepsHTML(g) + '</section></div>' +
-          '<section class="panel p3d" aria-labelledby="h-3d"><h2 id="h-3d">立体で見る</h2><p class="hint">ドラッグで回転、ホイールやピンチで拡大します。地上の建物は実際の高さです。手順を押すとその場所に寄ります。高さは見やすいように強調していて、左下の「深さ」で変えられます。</p>' +
+          '<section class="panel p3d" aria-labelledby="h-3d"><h2 id="h-3d">立体で見る</h2><p class="hint">ドラッグで回転、ホイールやピンチで拡大します。右上の方位マークを押すと北が上になります。地上の建物は実際の高さです。手順を押すとその場所に寄ります。高さは見やすいように強調していて、左下の「深さ」で変えられます。</p>' +
             '<div class="stage" id="stage"><div class="views">' +
               '<button type="button" data-view="oblique">斜めから</button><button type="button" data-view="side">横から</button><button type="button" data-view="top">真上から</button><button type="button" data-view="play">歩く様子</button>' +
               (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
@@ -1473,13 +1511,14 @@ var View3D = (function () {
     $('navbox').innerHTML = '<section class="nav" aria-label="案内" aria-live="polite">' +
       '<div class="navbar"><button type="button" class="navx" data-nav="stop" aria-label="案内をやめる">✕</button>' +
         '<div class="prog" aria-hidden="true"><span style="width:' + (100 * i / (n - 1)) + '%"></span></div><b>' + (i + 1) + ' / ' + n + '</b></div>' +
+      // ボタンは内容より上に置く（内容の長さでボタンの位置が上下しないように）
+      '<div class="navctl"><button type="button" data-nav="prev"' + (i === 0 ? ' disabled' : '') + '>◀ もどる</button>' +
+        '<button type="button" class="primary" data-nav="next"' + (i === n - 1 ? ' disabled' : '') + '>' + (i === n - 1 ? '到着' : 'つぎへ ▶') + '</button></div>' +
+      '<div class="navkeys">キーボードの ← → でも進めます</div>' +
       '<div class="navmain">' + stepIcon(s) + '<div class="navtx"><b>' + esc(s.title) + '</b>' +
         (sub ? '<small>' + esc(sub) + '</small>' : '') + (s.where ? '<span class="where">' + esc(s.where) + '</span>' : '') + '</div></div>' +
       illust(s) +
       (next ? '<div class="navnext">つぎに ' + stepIcon(next) + '<span>' + esc(next.title) + '</span></div>' : '') +
-      '<div class="navctl"><button type="button" data-nav="prev"' + (i === 0 ? ' disabled' : '') + '>◀ もどる</button>' +
-        '<button type="button" class="primary" data-nav="next"' + (i === n - 1 ? ' disabled' : '') + '>' + (i === n - 1 ? '到着' : 'つぎへ ▶') + '</button></div>' +
-      '<div class="navkeys">キーボードの ← → でも進めます</div>' +
       '</section>';
     $('navbox').querySelectorAll('[data-nav]').forEach(function (b) {
       b.addEventListener('click', function () {
