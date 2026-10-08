@@ -1755,14 +1755,14 @@ var View3D = (function () {
     });
     Object.keys(vert).forEach(function (key) {
       var m = ribbonMesh(vert[key], cMuted, 0.55);
-      m.userData.base = 0.55; m.userData.lv = key.split(':').map(Number); netMeshes.push(m); scene.add(m); vertObjs.push(m);
+      m.userData.base = 0.55; m.userData.lv = key.split(':').map(Number); m.userData.net = true; netMeshes.push(m); scene.add(m); vertObjs.push(m);
     });
     shaftSegs.forEach(function (s) {
       if (cells && coveredBy(cells, [0.15, 0.5, 0.85].map(function (t) { return s[0].clone().lerp(s[1], t); }))) return;
       var h = Math.abs(s[0].y - s[1].y);
       var m = new THREE.Mesh(new THREE.BoxGeometry(2.4, h, 2.4), new THREE.MeshBasicMaterial({ color: cMuted, transparent: true, opacity: 0.28, depthWrite: false }));
       m.position.set((s[0].x + s[1].x) / 2, (s[0].y + s[1].y) / 2, (s[0].z + s[1].z) / 2);
-      m.userData.base = 0.28; m.userData.lv = [s[2], s[3]]; netMeshes.push(m); scene.add(m); vertObjs.push(m);
+      m.userData.base = 0.28; m.userData.lv = [s[2], s[3]]; m.userData.net = true; netMeshes.push(m); scene.add(m); vertObjs.push(m);
     });
   }
   function ubldCells(grp) {
@@ -1830,11 +1830,13 @@ var View3D = (function () {
       var lv = Number(key.split('|')[0]), s = STYLE[key.split('|')[1]];
       var m = ribbonMesh(fills[key], s[0], s[1]);
       m.renderOrder = -1; m.userData.base = s[1]; m.userData.lv = [lv, lv]; m.userData.space = true; netMeshes.push(m); scene.add(m); spaceObjs.push(m);
+      var kd = key.split('|')[1];
+      m.userData.color = s[0]; m.userData.fpvColor = kd === 'wt' ? '#cbd6ea' : kd === 'w' || kd === 't' ? '#d9dde4' : '#b9c0cb'; // リアル視点の不透明な床の色
     });
     Object.keys(lines).forEach(function (lv) {
       var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(lines[lv], 3));
       var m = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: cMuted, transparent: true, opacity: 0.5, depthWrite: false }));
-      m.userData.base = 0.5; m.userData.lv = [Number(lv), Number(lv)]; m.userData.space = true; netMeshes.push(m); scene.add(m); spaceObjs.push(m);
+      m.userData.base = 0.5; m.userData.lv = [Number(lv), Number(lv)]; m.userData.space = true; m.userData.outline = true; netMeshes.push(m); scene.add(m); spaceObjs.push(m);
     });
   }
   function setSpaces(on) {
@@ -2103,7 +2105,7 @@ var View3D = (function () {
     });
     Object.keys(pass).forEach(function (key) {
       var m = ribbonMesh(pass[key], cWalk, 0.32);
-      m.userData.base = 0.32; m.userData.lv = key.split(':').map(Number); netMeshes.push(m); scene.add(m);
+      m.userData.base = 0.32; m.userData.lv = key.split(':').map(Number); m.userData.net = true; netMeshes.push(m); scene.add(m);
     });
     shaftSegs = shafts;
     drawVert(null);
@@ -2410,9 +2412,14 @@ var View3D = (function () {
         else if (u.city === 'ubld') b = fpv ? 1 : 0.12; // 地下街は案内中も、地下の空間の手がかりとして薄く残す（中から見るときは透明にしない）
         else b = (u.city === 'road' && sel.hi > -0.01) ? b * 0.35 : 0; // 写真の街並み（建物・航空写真）は案内中はすべて消す
       }
-      // リアル視点では、構内図の床は地下街のような薄い半透明に（案内中の階を濃くする処理もかけない）。斜めから見ると重なって、
-      // 地下街の床を覆う濃い青に見えていた（2026-10-09 利用者「リアル視点で案内中は、構内図の床は半透明にできる？地下街のように表示してほしい」）
-      if (u.space && fpv) b = u.base * 0.4;
+      // リアル視点では、構内図の床は不透明な床に（地下街の床に近い明るい色。2026-10-09 利用者「リアル視点で案内中の構内図の床が半透明に
+      // なってる。不透明がいいな」。前は半透明: 「地下街のように表示してほしい」）。輪郭の線と、通路網の線（GTFS-Pathways の通路・階段・
+      // エレベーター）は出さない（利用者「リアル案内中の床にパスの線が見えるけど、これは非表示にできる？」）
+      if (u.space && !u.outline && u.fpvMat !== fpv) {
+        m.material.color.set(fpv ? u.fpvColor : u.color); m.material.transparent = !fpv; m.material.depthWrite = fpv; m.material.needsUpdate = true; u.fpvMat = fpv;
+      }
+      if (fpv && u.space) b = u.outline ? 0 : 1;
+      if (fpv && u.net) b = 0;
       m.material.opacity = b;
       m.visible = b > 0.003;
     });
