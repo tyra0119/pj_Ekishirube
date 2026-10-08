@@ -863,17 +863,17 @@ var View3D = (function () {
   function loadTile(url) {
     if (photoCache[url]) return photoCache[url];
     return photoCache[url] = fetch(url).then(function (r) { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }).then(function (buf) {
-      var dv = new DataView(buf), glb = buf, center = [0, 0, 0], ftype = null;
+      var dv = new DataView(buf), glb = buf, center = [0, 0, 0], ftype = null, gmlid = null;
       if (dv.getUint32(0, true) === 0x6d643362) { // 'b3dm': 見出しと表を飛ばして中の glb を取り出す
         var ftj = dv.getUint32(12, true), off = 28 + ftj + dv.getUint32(16, true) + dv.getUint32(20, true) + dv.getUint32(24, true);
         if (ftj) { var ft = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 28, ftj))); if (ft.RTC_CENTER) center = ft.RTC_CENTER; }
         var btj = dv.getUint32(20, true); // 属性表（部品の種類 feature_type など。地下街で床だけを数えるのに使う）
-        if (btj) { try { var bt = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 28 + ftj + dv.getUint32(16, true), btj))); if (Array.isArray(bt.feature_type)) ftype = bt.feature_type; } catch (e) {} }
+        if (btj) { try { var bt = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 28 + ftj + dv.getUint32(16, true), btj))); if (Array.isArray(bt.feature_type)) ftype = bt.feature_type; if (Array.isArray(bt.gml_id)) gmlid = bt.gml_id; } catch (e) {} }
         glb = buf.slice(off);
       }
       var gv = new DataView(glb), jl = gv.getUint32(12, true), json = JSON.parse(new TextDecoder().decode(new Uint8Array(glb, 20, jl)));
       if (json.extensions && json.extensions.CESIUM_RTC) center = json.extensions.CESIUM_RTC.center;
-      return new Promise(function (ok, ng) { gltfLoader.parse(glb, '', function (g) { ok({ scene: g.scene, center: center, ftype: ftype }); }, ng); });
+      return new Promise(function (ok, ng) { gltfLoader.parse(glb, '', function (g) { ok({ scene: g.scene, center: center, ftype: ftype, gmlid: gmlid }); }, ng); });
     });
   }
   // 地面の航空写真: 駅の範囲にかかる地理院タイル（ズーム 18、多いときは 17）を 1 枚の画像に並べ、地面に貼る
@@ -965,6 +965,9 @@ var View3D = (function () {
   // 通路網の階ごとに、その階の点がいちばんよく乗る（水平の距離の中央値が 3 m 以内の）床のまとまりの深さに合わせる。
   // あいだは直線でつなぐ。床が数えられないとき（LOD1 の箱）は、建物ごとの一番低い点の
   // 中央値を地下 1 層目に合わせる
+  // 駅ごとに消す地下街の面（gml_id）。通路網が突き抜けている本当の壁（2026-10-08 利用者「上記 2 件の壁は、消して」）:
+  // 新宿西口 D1 の出入口の先（402N0020→402N0187）の細い仕切り 2 面と、ホームへ下りる手前（402N0175→402N0220）の壁 2 面
+  var UBLD_HIDE = { '402': { 'bdry_7e4c5782-b3ad-48d5-a56c-05a678fa4fd0': 1, 'bdry_1cd36a68-d3bb-4f94-842a-1d4ca3157add': 1, 'bdry_2ef855c3-ad42-4d3b-afd5-0592c8392d98': 1, 'bdry_a2505b93-a24e-4a6a-a3c0-92a2b85447aa': 1 } };
   var ubldCache = {}, ubldReal = {}; // ubldReal: 駅 ID → 段のある通路の点の深さ（地下街を表示しているときだけ使う）
   var realY = null; // いま描いている駅で、深さを置き直す点の高さ（点の番号 → 高さ。使わないときは null）
   function ubldLevels(meshes, ground, st) {
@@ -1180,7 +1183,7 @@ var View3D = (function () {
         var holder = new THREE.Group();
         holder.matrixAutoUpdate = false; holder.matrix.copy(tileMatrix(st, r.center));
         holder.add(r.scene); holder.updateMatrixWorld(true);
-        r.scene.traverse(function (o) { if (o.isMesh) { o.userData.ftype = r.ftype; meshes.push(o); } });
+        r.scene.traverse(function (o) { if (o.isMesh) { o.userData.ftype = r.ftype; o.userData.gmlid = r.gmlid; meshes.push(o); } });
       });
       var mins = [];
       meshes.forEach(function (o) {
@@ -1191,13 +1194,14 @@ var View3D = (function () {
         o.userData.origY = Float32Array.from({ length: p.count }, function (_, k) { return p.getY(k); });
         // 実際には無い面は描かない: 閉じ面（ClosureSurface）・部屋の境（uro:Room）は空間の区切りを表すだけで、描くと通路をふさぐ壁に
         // 見える。扉（Door）も通路の途中にあると前が見えなくなるので描かない（新宿西口の 5 経路で、目の高さで突き抜ける面の 9 割がこれら）
-        var ftv = o.userData.ftype;
+        var ftv = o.userData.ftype, gid = o.userData.gmlid, hideIds = UBLD_HIDE[st.id] || {};
         if (ftv && id) {
           var HIDE = { 'uro:ClosureSurface': 1, 'uro:Room': 1, 'uro:Door': 1 };
           var src = o.geometry.index ? o.geometry.index.array : null, n3 = src ? src.length : p.count, keepIdx = [];
           for (var q = 0; q < n3; q += 3) {
             var a0 = src ? src[q] : q;
-            if (!HIDE[ftv[id.getX(a0)]]) keepIdx.push(a0, src ? src[q + 1] : q + 1, src ? src[q + 2] : q + 2);
+            var bi0 = id.getX(a0);
+            if (!HIDE[ftv[bi0]] && !(gid && hideIds[gid[bi0]])) keepIdx.push(a0, src ? src[q + 1] : q + 1, src ? src[q + 2] : q + 2);
           }
           o.geometry.setIndex(keepIdx);
         }
@@ -1347,24 +1351,53 @@ var View3D = (function () {
       s.lookAt(s.position.clone().sub(dir));
       grp.add(s);
     });
+    // 改札: 通る所（pathway_mode 6）に、通路を横切る向きの改札機の列と、上に緑の「改札」の案内板。
+    // 改札機は 0.9 m おきに 6 台。歩く線の上は通れるように空け、通れる改札機の上面に緑の明かり
+    var cabMat = new THREE.MeshLambertMaterial({ color: 0x8a919e }), litMat = new THREE.MeshBasicMaterial({ color: css('--gate') });
+    E.forEach(function (ed, i) {
+      if (ed.mode !== 6) return;
+      var a = P[i], b = P[i + 1], d = flatDir(a, b) || (i > 0 ? flatDir(P[i - 1], a) : null);
+      if (!d) return;
+      var mid = a.clone().lerp(b, 0.5), side = new THREE.Vector3(-d.z, 0, d.x), gate = new THREE.Group();
+      [-2.25, -1.35, -0.45, 0.45, 1.35, 2.25].forEach(function (off) {
+        var cab = new THREE.Mesh(new THREE.BoxGeometry(0.22, 1.0, 1.4), cabMat);
+        cab.position.copy(mid).add(side.clone().multiplyScalar(off)); cab.position.y = mid.y + 0.5;
+        cab.rotation.y = Math.atan2(d.x, d.z);
+        gate.add(cab);
+        if (Math.abs(off) < 1) { // 歩く線のすぐ両側の改札機は、通れる印に上を緑に
+          var lit = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.04, 0.5), litMat);
+          lit.position.copy(cab.position); lit.position.y = mid.y + 1.02; lit.rotation.y = cab.rotation.y;
+          gate.add(lit);
+        }
+      });
+      var s = signMesh('改札', css('--gate'), 1.8);
+      s.position.set(mid.x - d.x * 0.5, mid.y + 2.3, mid.z - d.z * 0.5);
+      s.lookAt(s.position.clone().sub(d));
+      gate.add(s);
+      grp.add(gate);
+    });
     fpvSigns = grp; scene.add(grp);
   }
   // 区間をたどる: i が手順の番号（出発・到着は、その場所で止まって前を見る）、-1 なら経路全体
   function fpvStart(i) {
-    var curve = null, fixedU = null;
+    // 経路全体の線の上で、その手順の区間を少し手前から歩く（改札は 6 m 手前から。改札が前に見えるように。ほかは 2 m）
+    if (!routeCurve) return;
+    var total = routeCurve.getLength(), u0 = 0, u1 = 1, fixedU = null;
     if (i >= 0) {
-      var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
-      if (t) curve = t.userData.curve;
-      else { curve = routeCurve; fixedU = i === 0 ? 0 : 1; }
-    } else curve = routeCurve;
-    if (!curve) return;
-    var len = curve.getLength();
-    fpvWalk = { curve: curve, len: len, s: performance.now(), d: fixedU !== null ? 1 : Math.max(2500, len / 2.4 * 1000), fixedU: fixedU };
+      var ks = [];
+      edgeStep.forEach(function (s, k) { if (s === i) ks.push(k); });
+      if (ks.length) {
+        var st0 = lastArgs && lastArgs[1].steps[i], back = st0 && st0.kind === 'gate' ? 6 : 2;
+        u0 = Math.max(0, edgeCum[ks[0]] - back) / total;
+        u1 = Math.min(total, edgeCum[ks[ks.length - 1] + 1]) / total;
+      } else fixedU = i === 0 ? 0 : 1; // 出発・到着は、その場所で前を見る
+    }
+    fpvWalk = { curve: routeCurve, len: total, u0: u0, u1: u1, s: performance.now(), d: fixedU !== null ? 1 : Math.max(2500, (u1 - u0) * total / 2.4 * 1000), fixedU: fixedU };
     fpvLook = null;
   }
   function updateFpv(now) {
     if (!fpvWalk) return;
-    var w = fpvWalk, u = w.fixedU !== null ? w.fixedU : Math.min(1, (now - w.s) / w.d);
+    var w = fpvWalk, u = w.fixedU !== null ? w.fixedU : w.u0 + (w.u1 - w.u0) * Math.min(1, (now - w.s) / w.d);
     var p = w.curve.getPointAt(u), ahead = Math.min(1, u + 5 / Math.max(5, w.len)), q;
     if (ahead - u < 1e-3) { var tg = w.curve.getTangentAt(Math.min(0.999, u)); q = p.clone().add(new THREE.Vector3(tg.x, 0, tg.z).normalize().multiplyScalar(5)); }
     else q = w.curve.getPointAt(ahead);
