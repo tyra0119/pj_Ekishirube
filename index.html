@@ -146,6 +146,12 @@ select:focus-visible, button:focus-visible, input:focus-visible + span { outline
 .bname i { display: none; font-style: normal; font-size: 10px; color: var(--muted); }
 .bname.edge { opacity: .85; translate: -50% -50%; font-weight: 500; }
 .bname.edge i { display: inline-block; }
+/* 出発・到着のピン。名前の札より手前 */
+.pins { position: absolute; inset: 0; pointer-events: none; z-index: 1; overflow: hidden; }
+.pin3d { position: absolute; left: 0; top: 0; width: 52px; height: 65px; translate: -50% -97%; filter: drop-shadow(0 1px 2px rgba(0,0,0,.35)); }
+.pin3d svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.pin3d text { fill: #ffffff; font-family: var(--f-body); font-weight: 900; font-size: 50px; }
+.pins.big .pin3d { width: 80px; height: 100px; }
 .cstatus { position: absolute; right: 8px; bottom: 8px; z-index: 2; font-size: 12px; padding: 4px 10px; border-radius: 999px;
   background: var(--surface); border: 1px solid var(--line); color: var(--muted); }
 .stage .fail { position: absolute; inset: 0; display: grid; place-items: center; padding: 16px; color: var(--muted); font-size: 13px; text-align: center; }
@@ -749,7 +755,7 @@ var View3D = (function () {
   var showUbld = false; // 駅によってはデータが多いので選んだときだけ読み込む
   try { showUbld = UBLD_ENABLED && localStorage.getItem('ekishirube.ubld') === '1'; } catch (e) {}
   var sel = null;       // いま選んでいる手順 { i, lo, hi, curve, ring }
-  var ripple = null, routePts = [], lastCull = 0, compass = null, lastHeading = null, names = [], nameBox = null;
+  var ripple = null, routePts = [], lastCull = 0, compass = null, lastHeading = null, names = [], nameBox = null, pins = [], pinBox = null;
   var renderer, scene, camera, controls, el, ro, started = false;
   var segTubes = [], netMeshes = [], routeTube, routeCurve, dot, edgeCum = [], edgeStep = [], total = 0;
   var home = null, platAxis = null, anim = null, play = null, onStep = null, lastFocus = null;
@@ -1508,20 +1514,23 @@ var View3D = (function () {
     return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: opacity, side: THREE.DoubleSide, depthWrite: false }));
   }
 
-  // 出発・到着のピン（画面上で一定の大きさ。下の先がその場所）
-  function pinSprite(text, color, px) {
-    var c = document.createElement('canvas'); c.width = 160; c.height = 200;
-    var x = c.getContext('2d');
-    function shape() { x.beginPath(); x.arc(80, 74, 66, Math.PI * 0.8, Math.PI * 0.2); x.lineTo(80, 194); x.closePath(); }
-    shape(); x.fillStyle = '#ffffff'; x.fill();
-    x.save(); x.translate(80, 80); x.scale(0.9, 0.9); x.translate(-80, -80); shape(); x.fillStyle = color; x.fill(); x.restore();
-    x.fillStyle = '#ffffff'; x.font = '900 40px "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", sans-serif';
-    x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, 80, 76);
-    var tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter;
-    var s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
-    var hh = px / ((el && el.clientHeight) || 440) * 2 * Math.tan(THREE.MathUtils.degToRad(19));
-    s.scale.set(hh * 160 / 200, hh, 1); s.center.set(0.5, 0.02); s.renderOrder = 14;
-    return s;
+  // 出発・到着のピン（画面上で一定の大きさ。下の先がその場所）。建物の名前の札（HTML）より手前に出すため、立体図に重ねる HTML で描く
+  // （2026-10-08 利用者「ピンを札より手前に書いて」。前は立体の中の絵で、札の下に隠れていた）
+  function pinEl(text, color) {
+    var d = document.createElement('div'); d.className = 'pin3d';
+    d.innerHTML = '<svg viewBox="0 0 160 200" aria-hidden="true"><path d="M133.4 112.8 A66 66 0 1 0 26.6 112.8 L80 194 Z" fill="' + color +
+      '" stroke="#ffffff" stroke-width="9" stroke-linejoin="round"/><text x="80" y="76" text-anchor="middle" dominant-baseline="central">' + text + '</text></svg>';
+    d.setAttribute('aria-label', text);
+    return d;
+  }
+  function placePins() {
+    var W = el.clientWidth, H = el.clientHeight, v = new THREE.Vector3();
+    pinBox.classList.toggle('big', fpv); // リアル視点では大きく（2026-10-08 利用者「リアル視点で…ピンが小さく、文字が読みにくい」）
+    pins.forEach(function (n) {
+      v.copy(n.pos).project(camera);
+      n.el.hidden = v.z > 1;
+      n.el.style.transform = 'translate(' + Math.round((v.x + 1) / 2 * W) + 'px,' + Math.round((1 - v.y) / 2 * H) + 'px)';
+    });
   }
   // 人のマーク（緑の丸に白い人。画面上で一定の大きさ）
   function personSprite(color, px) {
@@ -1632,6 +1641,9 @@ var View3D = (function () {
     var oldN = el.querySelector('.bnames'); if (oldN) oldN.remove();
     nameBox = document.createElement('div'); nameBox.className = 'bnames'; el.appendChild(nameBox);
     names = [];
+    var oldP = el.querySelector('.pins'); if (oldP) oldP.remove();
+    pinBox = document.createElement('div'); pinBox.className = 'pins'; el.appendChild(pinBox); // 名前の札より後に置き、手前に出す
+    pins = [];
     el.appendChild(compass);
     lastHeading = null;
     ro.observe(el);
@@ -1865,8 +1877,8 @@ var View3D = (function () {
       var ep = pair[0], p = pair[1];
       var ball = new THREE.Mesh(new THREE.SphereGeometry(1.0, 16, 12), new THREE.MeshBasicMaterial({ color: pair[3] }));
       ball.position.copy(p); scene.add(ball);
-      var pin = pinSprite(pair[2], pair[3], 54);
-      pin.position.copy(p); pin.userData.pin = true; scene.add(pin);
+      var pin = pinEl(pair[2], pair[3]);
+      pinBox.appendChild(pin); pins.push({ pos: p.clone(), el: pin });
       if (ep.type === 'plat') {
         var pl = st.plats.filter(function (x) { return x.id === ep.id; })[0];
         var lb = label(pl.code + '番線', cOedo, '#ffffff', 18, null, 60); labels.push(lb);
@@ -2138,6 +2150,7 @@ var View3D = (function () {
     if (!fpv) controls.update();
     if (now - lastCull > 120) { lastCull = now; scene.updateMatrixWorld(); cullLabels(); }
     if (nameBox) placeNames();
+    if (pinBox) placePins();
     if (compass) {
       var hd = Math.round(headingDeg()); // 北が画面の上から時計回りに何度の所にあるか
       if (hd !== lastHeading) { lastHeading = hd; compass.firstChild.style.transform = 'rotate(' + hd + 'deg)'; }
