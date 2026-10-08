@@ -214,6 +214,14 @@ footer a { color: inherit; }
 .start { font: inherit; font-weight: 700; font-size: 15px; padding: 10px 18px; border-radius: 10px; border: 0; cursor: pointer;
   background: var(--sel); color: #fff; margin-left: auto; }
 .start:hover { filter: brightness(1.08); }
+.acts { display: flex; gap: 8px; align-items: center; margin-left: auto; }
+.acts .start { margin-left: 0; }
+.share { font: inherit; font-weight: 700; font-size: 14px; padding: 9px 14px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--line); background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; gap: 6px; }
+.share:hover { border-color: var(--sel); color: var(--sel); }
+.toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); translate: -50% 0; z-index: 30; pointer-events: none;
+  background: var(--ink); color: var(--bg); font-size: 14px; padding: 8px 16px; border-radius: 999px; opacity: 0; transition: opacity .2s; }
+.toast.on { opacity: 1; }
 .nav { background: var(--surface); border: 2px solid var(--sel); border-radius: var(--r); padding: 12px 16px 14px; display: grid; gap: 10px; }
 .navbar { display: flex; align-items: center; gap: 10px; }
 .navbar b { font-family: var(--f-num); font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; flex: none; }
@@ -302,7 +310,8 @@ footer a { color: inherit; }
   #out > .notice { grid-column: 1 / -1; align-self: start; }
   .main { display: contents; }
   .summary { grid-column: 1; grid-row: 1; margin-top: 0; padding: 10px 14px; gap: 6px 12px; }
-  .summary .start { margin-left: 0; width: 100%; }
+  .summary .acts { margin-left: 0; width: 100%; }
+  .summary .start { flex: 1; }
   body.nav-on .summary { display: none; } /* 案内中は案内カードがあるので、要約を隠して歩く順番を広く */
   .mins { font-size: 30px; }
   .side { grid-column: 1; grid-row: 2 / 4; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
@@ -1605,6 +1614,7 @@ var View3D = (function () {
   var ICON = {
     walk: '<path d="M3 10h13M12 5l5 5-5 5"/>',
     uturn: '<path d="M14 17V8a4 4 0 0 0-8 0v9M3 13.5l3 3.5 3-3.5"/>',
+    share: '<path d="M10 12V3M6.5 6.5 10 3l3.5 3.5M6 9H4.5v8h11V9H14"/>',
     turnR: '<path d="M6 17V10a3 3 0 0 1 3-3h8M13.5 3.5 17 7l-3.5 3.5"/>',
     turnL: '<path d="M14 17V10a3 3 0 0 0-3-3H3M6.5 3.5 3 7l3.5 3.5"/>',
     stairUp: '<path d="M2 17h4v-4h4V9h4V5h4"/>',
@@ -1671,6 +1681,50 @@ var View3D = (function () {
   var SAVE_KEY = 'ekishirube.choice';
   function saveChoice() {
     try { localStorage.setItem(SAVE_KEY, JSON.stringify({ st: state.st.id, from: $('from').value, to: $('to').value, pr: profile() })); } catch (e) {}
+    // アドレス欄も選んだ内容に合わせる（そのままコピーしても同じ案内が開く）。埋め込み（アーティファクト）では変えない
+    try { if (/^https?:/.test(location.protocol) && window.top === window) history.replaceState(null, '', location.pathname + choiceQuery()); } catch (e) {}
+  }
+  // ---------- 共有リンク ----------
+  // ?st=駅ID&from=exit:A3&to=plat:421P4&pr=std。開くと、前回の選択より優先してその案内を出す
+  var PUBLIC_URL = 'https://tyra0119.github.io/pj_Ekishirube/';
+  function choiceQuery() {
+    return '?st=' + encodeURIComponent(state.st.id) + '&from=' + encodeURIComponent($('from').value) + '&to=' + encodeURIComponent($('to').value) + '&pr=' + profile();
+  }
+  function urlChoice() {
+    try {
+      var p = new URLSearchParams(location.search);
+      return p.get('st') ? { st: p.get('st'), from: p.get('from'), to: p.get('to'), pr: p.get('pr') } : null;
+    } catch (e) { return null; }
+  }
+  function epText(ep) {
+    if (ep.type === 'exit') return ep.id + '出入口';
+    var p = state.st.plats.filter(function (x) { return x.id === ep.id; })[0];
+    return p ? Guide.platLabel(state.st, p) : '';
+  }
+  var toastTimer = null;
+  function toast(msg) {
+    var t = document.querySelector('.toast');
+    if (!t) { t = document.createElement('div'); t.className = 'toast'; t.setAttribute('role', 'status'); document.body.appendChild(t); }
+    t.textContent = msg; t.classList.add('on');
+    clearTimeout(toastTimer); toastTimer = setTimeout(function () { t.classList.remove('on'); }, 2200);
+  }
+  function shareRoute() {
+    var url = PUBLIC_URL + choiceQuery();
+    var text = 'エキしるべ: ' + state.st.name + '駅 ' + epText(parseEp($('from').value)) + ' → ' + epText(parseEp($('to').value));
+    // スマートフォンは端末の共有（LINE・メールなど）、パソコンはリンクをコピー
+    var touch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
+    if (touch && navigator.share) { navigator.share({ title: 'エキしるべ', text: text, url: url }).catch(function () {}); return; }
+    var done = function () { toast('リンクをコピーしました'); };
+    var fallback = function () {
+      // クリップボードの許可が無いときは、古い方式（選んでコピー）を試し、それも駄目なら手でコピーしてもらう
+      var ta = document.createElement('textarea'); ta.value = url; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand('copy'); } catch (e) {}
+      ta.remove();
+      if (ok) done(); else window.prompt('このリンクをコピーして送ってください', url);
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(url).then(done, fallback);
+    else fallback();
   }
   function loadChoice() {
     try { return JSON.parse(localStorage.getItem(SAVE_KEY)) || null; } catch (e) { return null; }
@@ -1726,6 +1780,7 @@ var View3D = (function () {
       View3D.setCityAlpha(a);
     });
     $('nav-start').addEventListener('click', function () { startNav(0); });
+    $('share').addEventListener('click', shareRoute);
     $('depth').addEventListener('input', function () {
       var k = parseFloat(this.value);
       $('depth-v').textContent = '×' + k.toFixed(1);
@@ -1749,7 +1804,8 @@ var View3D = (function () {
       '<div style="display:grid;gap:6px;min-width:0">' +
         '<div class="route-line">' + epBadge(from) + '<span aria-hidden="true">→</span><span class="sr-only" style="position:absolute;left:-9999px">から</span>' + epBadge(to) + '</div>' +
         '<div class="chips">' + chips.join('') + '</div>' +
-      '</div><button type="button" class="start" id="nav-start">▶ 案内をはじめる</button></div>';
+      '</div><div class="acts"><button type="button" class="start" id="nav-start">▶ 案内をはじめる</button>' +
+      '<button type="button" class="share" id="share" title="この案内のリンクを送る（開くと同じ案内が出ます）">' + icon('share', 16) + '共有</button></div></div>';
   }
 
   function stepIcon(s) {
@@ -2089,8 +2145,8 @@ var View3D = (function () {
   if (window.CITY && CITY.year) $('city-credit').textContent = '建物・建物の名前・道路：「3D都市モデル（Project PLATEAU）東京都23区（' + CITY.year + '年度）」（国土交通省）を加工して作成。建物の高さは実測の値で、地下の深さ（強調あり）とは縮尺が違います。' +
     (window.TILES ? '写真の街並み（お試し）の地面：地理院タイル（シームレス空中写真）（国土地理院）。' : '');
   // 初期状態: 大門駅 A3出入口 → 4番線（赤羽橋方面）
-  // 前回の選択があればそこから。無ければ大門駅 A3出入口 → 4番線
-  var saved = loadChoice(), start = -1;
+  // 共有リンク（URL の指定）があればそれ、無ければ前回の選択、それも無ければ大門駅 A3出入口 → 4番線
+  var saved = urlChoice() || loadChoice(), start = -1;
   if (saved) {
     start = STATIONS.findIndex(function (s) { return s.id === saved.st; });
     if (saved.pr && $('p-' + saved.pr)) $('p-' + saved.pr).checked = true;
