@@ -855,7 +855,7 @@ var View3D = (function () {
   var segTubes = [], netMeshes = [], routeTube, routeCurve, dot, edgeCum = [], edgeStep = [], total = 0;
   // 途中から再開する位置（経路全体の線の上の割合 0〜1）。自動で歩くのを止めた所、手動の案内を閉じた手順の始まり。
   // 歩き終えた・経路を選び直したら null（最初から）（2026-10-08 利用者「最初からの案内にはならないようにしてほしい」）
-  var resumeU = null;
+  var resumeU = null, holdU = null, playSide = 0; // playSide: 自動で歩くときの斜めの度合い（下りで 1 に近づく）
   var home = null, platAxis = null, anim = null, play = null, onStep = null, onPlay = null, wasPlaying = false, lastFocus = null;
   var reduce = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -1536,9 +1536,11 @@ var View3D = (function () {
   // 区間をたどる: i が手順の番号（出発・到着は、その場所で止まって前を見る）、-1 なら経路全体
   function playU() { return play ? Math.max(0, Math.min(1, (performance.now() - play.s) / play.d)) : null; }
   // 手順 i の始まりの位置（経路全体の線の上の割合）。出発・到着など線の無い手順は null
-  function stepStartU(i) {
-    for (var k = 0; k < edgeStep.length; k++) if (edgeStep[k] === i) return total ? edgeCum[k] / total : null;
-    return null;
+  function stepStartU(i) { var r = stepRangeU(i); return r ? r[0] : null; }
+  function stepRangeU(i) {
+    var k0 = -1, k1 = -1;
+    for (var k = 0; k < edgeStep.length; k++) if (edgeStep[k] === i) { if (k0 < 0) k0 = k; k1 = k; }
+    return k0 >= 0 && total ? [edgeCum[k0] / total, edgeCum[k1 + 1] / total] : null;
   }
   function fpvStart(i, startU) {
     // 経路全体の線の上で、その手順の区間を少し手前から歩く（改札は 6 m 手前から。改札が前に見えるように。ほかは 2 m）
@@ -1552,6 +1554,8 @@ var View3D = (function () {
         u0 = Math.max(0, edgeCum[ks[0]] - back) / total;
         u1 = Math.min(total, edgeCum[ks[ks.length - 1] + 1]) / total;
       } else fixedU = i === 0 ? 0 : 1; // 出発・到着は、その場所で前を見る
+      // 続きから: 止まった所がこの手順の途中なら、そこから歩く（手順の初めに戻らない。2026-10-08 利用者「止まった場所から再開してほしい」）
+      if (fixedU === null && startU > u0 && startU < u1) { u0 = startU; resumeU = null; }
     } else if (startU > 0 && startU < 1) u0 = startU; // 続きから
     fpvWalk = { curve: routeCurve, len: total, u0: u0, u1: u1, s: performance.now(), d: fixedU !== null ? 1 : Math.max(2500, (u1 - u0) * total / 2.4 * 1000), fixedU: fixedU, whole: i < 0 };
     fpvLook = null; lastPlayStep = -1;
@@ -2260,7 +2264,10 @@ var View3D = (function () {
     });
     if (routeTube) routeTube.visible = !fpv;
     if (ripple) { ripple.visible = !!(sel && sel.ring) && !fpv; if (sel && sel.ring) ripple.position.copy(sel.ring).add(new THREE.Vector3(0, 0.3, 0)); }
-    if (dot) dot.visible = (!on || !!play) && !fpv;
+    // 続きから案内した手順では、止まった所に青い丸を置いておく（外から見るとき。2026-10-08 利用者「止まった場所から再開してほしい」）
+    var rr = sel && resumeU !== null ? stepRangeU(sel.i) : null;
+    holdU = rr && resumeU >= rr[0] - 1e-6 && resumeU < rr[1] ? resumeU : null;
+    if (dot) dot.visible = (!on || !!play || holdU !== null) && !fpv;
     applyOpacity();
   }
 
@@ -2318,7 +2325,7 @@ var View3D = (function () {
     if (fpv) {
       // リアル視点: 手順ならその区間を目の高さでたどる。手順を外したとき（案内を × で閉じたなど）は、その場で止まる
       // （前は経路全体を歩き出していた。2026-10-08 利用者「リアル視点で…移動中に×を押すと、自動案内がはじまる」）
-      if (i >= 0) fpvStart(i);
+      if (i >= 0) fpvStart(i, resumeU);
       else if (fpvWalk) fpvWalk.fixedU = fpvWalk.u != null ? fpvWalk.u : fpvWalk.u0;
       return;
     }
@@ -2377,13 +2384,18 @@ var View3D = (function () {
         u = Math.min(1, (now - play.s) / play.d);
         var p = routeCurve.getPointAt(u), tan = routeCurve.getTangentAt(Math.min(0.999, u));
         var flat = new THREE.Vector3(tan.x, 0, tan.z); if (flat.lengthSq() < 1e-4) flat.set(1, 0, 0); flat.normalize();
-        var want = p.clone().sub(flat.clone().multiplyScalar(Math.max(45, LV * 3.2))).add(new THREE.Vector3(0, Math.max(30, LV * 2.2), 0));
+        // 下りでは真後ろからだと階段・エスカレーターが自分の陰で見えにくいので、後ろ斜め左（約 40 度）から見る。傾きに合わせてなめらかに
+        // （2026-10-08 利用者「自動（リアル視点ではない）で下りを進んでいる時、真後ろからではなく、後ろ斜め左からの視点にしてほしい」）
+        var down = Math.max(0, Math.min(1, -tan.y * 3)), side = new THREE.Vector3(-flat.z, 0, flat.x); // side: 進む向きの右
+        playSide = playSide + (down - playSide) * 0.04;
+        var ang = THREE.MathUtils.degToRad(40) * playSide, back = flat.clone().multiplyScalar(Math.cos(ang)).add(side.multiplyScalar(Math.sin(ang))); // カメラは左後ろ
+        var want = p.clone().sub(back.multiplyScalar(Math.max(45, LV * 3.2))).add(new THREE.Vector3(0, Math.max(30, LV * 2.2), 0));
         camera.position.lerp(want, 0.06); controls.target.lerp(p, 0.12);
         var s = stepAt(u);
         if (s !== lastPlayStep) { lastPlayStep = s; if (onStep) onStep(s); }
         if (u >= 1) { play = null; resumeU = null; lastPlayStep = -1; if (onStep) onStep(-1); }
       } else {
-        u = reduce ? 0 : ((now / 9000) % 1);
+        u = holdU !== null ? holdU : reduce ? 0 : ((now / 9000) % 1);
       }
       dot.position.copy(routeCurve.getPointAt(u));
     }
@@ -2466,7 +2478,13 @@ var View3D = (function () {
     set onStep(fn) { onStep = fn; }, set onPlay(fn) { onPlay = fn; },
     // 続きから: 再開する手順（無ければ -1）、手動の案内を閉じた手順を覚える、最初からに戻す
     get resumeStep() { return resumeU !== null && resumeU > 0 && resumeU < 1 && total ? stepAt(Math.min(1, resumeU + 0.5 / total)) : -1; },
-    setResumeStep: function (i) { var last = lastArgs ? lastArgs[1].steps.length - 1 : 0; resumeU = i > 0 && i < last ? stepStartU(i) : null; },
+    // 手動の案内を閉じたとき: 閉じた手順の中で止まった所（リアル視点で歩いていた位置、または続きから案内したときの位置）があればそこ、無ければ手順の初め
+    setResumeStep: function (i) {
+      var last = lastArgs ? lastArgs[1].steps.length - 1 : 0, r = i > 0 && i < last ? stepRangeU(i) : null;
+      if (!r) { resumeU = null; return; }
+      var cur = fpv && fpvWalk && fpvWalk.u != null ? fpvWalk.u : resumeU;
+      resumeU = cur !== null && cur >= r[0] - 1e-6 && cur < r[1] ? cur : r[0];
+    },
     clearResume: function () { resumeU = null; } };
 })();
 
