@@ -1105,6 +1105,44 @@ var View3D = (function () {
   }
 
   function css(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || '#888888'; }
+  // 階段・エスカレーターは、画面上で 35 度より急なら 35 度で描く。元データでは長い階段が下の端の近くに短く記録されていることがある
+  // （新宿西口: 実際は水平約 20 m・約 22 度の階段が、4.2 m の線になっていて、画面で 72 度だった）
+  var STAIR_TAN = Math.tan(35 * Math.PI / 180);
+  // 経路の点の並び P（辺 E[i] は P[i] → P[i+1]）で、急な階段の上の端を、同じ階の通路に沿って手前（下りなら来た方、上りなら行く方）へずらす。
+  // 通り過ぎた点はずらした先にまとめる（行って戻る形にしない）
+  function easeStairs(P, E) {
+    E.forEach(function (ed, i) {
+      if (ed.mode !== 2 && ed.mode !== 4) return;
+      var a = P[i], b = P[i + 1], dv = Math.abs(a.y - b.y);
+      if (dv < 0.1) return;
+      var extra = dv / STAIR_TAN - Math.hypot(b.x - a.x, b.z - a.z);
+      if (extra <= 0.3) return;
+      var down = a.y > b.y;
+      // まず上の端を手前へ（下りなら来た方、上りなら行く方）。足りなければ、残りを下の端で（下りなら行く方、上りなら来た方）
+      var left = shiftAlong(P, down ? i : i + 1, down ? -1 : 1, extra);
+      if (left > 0.3) shiftAlong(P, down ? i + 1 : i, down ? 1 : -1, left);
+    });
+  }
+  // 点 k を、同じ階の通路に沿って dir の向きへ amount だけずらす（通り過ぎた点はずらした先にまとめる）。ずらしきれなかった残りを返す
+  function shiftAlong(P, k, dir, amount) {
+    var y = P[k].y, cur = P[k].clone(), left = amount, moved = [k], q = null;
+    for (var j = k + dir; j >= 0 && j < P.length; j += dir) {
+      if (Math.abs(P[j].y - y) > 0.05) break; // 同じ階の通路だけ
+      var len = cur.distanceTo(P[j]);
+      if (len >= left) { q = cur.clone().lerp(P[j], left / len); left = 0; break; }
+      left -= len; cur = P[j].clone(); moved.push(j);
+    }
+    q = q || cur;
+    moved.forEach(function (m) { P[m] = q.clone(); });
+    return left;
+  }
+  // 通路網の階段 1 本: 上の端を、階段の水平の向きの反対へ伸ばす（向きが分からないほど短いときはそのまま）
+  function easeLink(a, b) {
+    var dv = Math.abs(a.y - b.y), hx = b.x - a.x, hz = b.z - a.z, h = Math.hypot(hx, hz), extra = dv / STAIR_TAN - h;
+    if (dv < 0.1 || extra <= 0.3 || h < 0.3) return;
+    var up = a.y > b.y ? a : b, s = up === a ? -1 : 1;
+    up.x += s * hx / h * extra; up.z += s * hz / h * extra;
+  }
   function V(st, i, lift) { var n = st.nodes[i]; return new THREE.Vector3(n[0], n[2] * LV + (lift || 0), -n[1]); }
 
   var labels = []; // 手順を選んだときに薄くする、地図の上のラベル
@@ -1266,6 +1304,18 @@ var View3D = (function () {
     LV = Math.max(8, rawSpan * 0.075) * depth;
     var cWalk = css('--walk'), cMuted = css('--muted'), cInk = css('--ink'), cOedo = css('--oedo'), cExit = css('--exit');
 
+    // 経路の表示位置（急な階段は緩やかに。手前の通路はその分短く）。通路網より先に作り、経路が通る階段は通路網も同じ位置で描く
+    var disp = [V(st, g.route.start, 0.8)], edgeIdx = new Map(), routeVert = {};
+    g.route.edges.forEach(function (ed, i) { edgeIdx.set(ed, i); disp.push(V(st, ed.b, 0.8)); });
+    easeStairs(disp, g.route.edges);
+    function dispA(ed) { return edgeIdx.has(ed) ? disp[edgeIdx.get(ed)].clone() : V(st, ed.a, 0.8); }
+    function dispB(ed) { return edgeIdx.has(ed) ? disp[edgeIdx.get(ed) + 1].clone() : V(st, ed.b, 0.8); }
+    g.route.edges.forEach(function (ed, i) {
+      if (ed.mode !== 2 && ed.mode !== 4) return;
+      var pa = disp[i].clone(), pb = disp[i + 1].clone(); pa.y -= 0.8; pb.y -= 0.8;
+      routeVert[ed.a + '-' + ed.b] = [pa, pb]; routeVert[ed.b + '-' + ed.a] = [pb, pa];
+    });
+
     // 通路網（データ全体）
     var pass = {}, vert = {}, shafts = [];
     st.links.forEach(function (l) {
@@ -1275,6 +1325,11 @@ var View3D = (function () {
       if (l[2] === 5 && Math.abs(a.y - b.y) > 0.1) { shafts.push([a, b, Math.min(za, zb), Math.max(za, zb)]); return; }
       if (hl < 0.3) return;
       var isV = (l[2] === 2 || l[2] === 4) && Math.abs(a.y - b.y) > 0.1;
+      if (isV) {
+        var rv = routeVert[l[0] + '-' + l[1]];
+        if (rv) { a = rv[0]; b = rv[1]; } else easeLink(a, b);
+        dx = b.x - a.x; dz = b.z - a.z; hl = Math.hypot(dx, dz); if (hl < 0.3) return;
+      }
       var w = isV ? 1.8 : 2.6, px = -dz / hl * w / 2, pz = dx / hl * w / 2;
       var bucket = isV ? vert : pass;
       (bucket[key] = bucket[key] || []).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
@@ -1374,13 +1429,14 @@ var View3D = (function () {
     });
 
     // 経路
-    var E = g.route.edges, pts = [V(st, g.route.start, 0.8)];
+    var E = g.route.edges;
+    var pts = [disp[0].clone()];
     edgeCum = [0]; edgeStep = []; total = 0;
     var stepOfEdge = new Map();
     g.segs.forEach(function (s, k) { s.edges.forEach(function (e) { stepOfEdge.set(e, k + 1); }); });
     var lastStep = 1;
     E.forEach(function (e) {
-      var p = V(st, e.b, 0.8), d = p.distanceTo(pts[pts.length - 1]);
+      var p = dispB(e), d = p.distanceTo(pts[pts.length - 1]);
       var k = stepOfEdge.has(e) ? stepOfEdge.get(e) : lastStep; lastStep = k;
       if (d > 0.05) { pts.push(p); total += d; edgeCum.push(total); edgeStep.push(k); }
     });
@@ -1398,7 +1454,7 @@ var View3D = (function () {
     g.segs.forEach(function (s, k) {
       // 手順から省いた短い通路（s.lead）も帯に含め、前の手順の帯とつなげる
       var all = (s.lead || []).concat(s.edges);
-      var sp = dedupe([V(st, all[0].a, 0.8)].concat(all.map(function (e) { return V(st, e.b, 0.8); })));
+      var sp = dedupe([dispA(all[0])].concat(all.map(function (e) { return dispB(e); })));
       if (sp.length < 2) return;
       var curve = polyCurve(sp), n = Math.min(800, sp.length * 12);
       var grp = new THREE.Group();
@@ -1421,7 +1477,7 @@ var View3D = (function () {
         grp.add(lb);
       }
       grp.visible = false; grp.userData.step = k + 1; grp.userData.center = ctr; grp.userData.curve = curve;
-      grp.userData.lo = Math.min(s.z0, s.z1); grp.userData.hi = Math.max(s.z0, s.z1); grp.userData.vert = s.kind === 'vert'; grp.userData.start = V(st, s.from, 0.8); // 波紋は昇降設備の入口に
+      grp.userData.lo = Math.min(s.z0, s.z1); grp.userData.hi = Math.max(s.z0, s.z1); grp.userData.vert = s.kind === 'vert'; grp.userData.start = s.edges.length ? dispA(s.edges[0]) : V(st, s.from, 0.8); // 波紋は昇降設備の入口に（緩やかにした階段は、ずらした入口）
       grp.userData.size = new THREE.Box3().setFromPoints(sp).getSize(new THREE.Vector3()).length();
       // 進む向き（水平）。始まりから終わりへ。エレベーターなど水平に動かない区間は無し
       // （手順の前に含めた短い通路 s.lead は入れない。逆の方向から来ると向きが反対になる）
