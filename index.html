@@ -726,8 +726,6 @@ var View3D = (function () {
   var showCity = true; // 地上の街並み（PLATEAU の建物・道路）
   var arrowStyle = 'band'; // 案内の矢印の形: band（帯）／tube（細い円柱）
   try { if (localStorage.getItem('ekishirube.arrow') === 'tube') arrowStyle = 'tube'; } catch (e) {}
-  var bldgStyle = 'line'; // 建物の見せ方: line（薄い塗りと輪郭線）／shade（色と陰影。Mini Tokyo 3D の建物に近い）
-  try { if (localStorage.getItem('ekishirube.bldg') === 'shade') bldgStyle = 'shade'; } catch (e) {}
   try { if (localStorage.getItem('ekishirube.city') === '0') showCity = false; } catch (e) {}
   try { var saved = parseFloat(localStorage.getItem('ekishirube.depth2')); if (saved > 0) depth = saved; } catch (e) {}
   var cityAlpha = 0.15; // 街並みの濃さ（0〜1。利用者が調整）
@@ -763,9 +761,9 @@ var View3D = (function () {
       var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: p[1], side: THREE.DoubleSide, transparent: true, opacity: 0.9, depthWrite: false }));
       m.renderOrder = -1; m.userData.city = 'road'; netMeshes.push(m); scene.add(m);
     });
-    // 建物（壁と屋根を 1 つの形にまとめる）。陰影のときは頂点ごとに色を持たせる:
+    // 建物（壁と屋根を 1 つの形にまとめる）。色と光で形を見せる（Mini Tokyo 3D の建物に近い見せ方）。頂点ごとに色を持たせ、
     // 壁は暖かい白（建物ごとに明るさを少しずらす）、屋根は少し色味を変え、壁の根元 4 m は暗くして地面に接する陰に見せる
-    var shade = bldgStyle === 'shade', pos = [], col = [];
+    var pos = [], col = [];
     var dark = (function () { var c = new THREE.Color(css('--bg')); return c.r + c.g + c.b < 1.5; })();
     var WALL = dark ? [220, 0.10, 0.42] : [32, 0.22, 0.90], ROOF = dark ? [220, 0.08, 0.34] : [26, 0.28, 0.83];
     function hsl(p, dl, k) { var c = new THREE.Color().setHSL(p[0] / 360, p[1], Math.min(1, p[2] + dl)); return [c.r * k, c.g * k, c.b * k]; }
@@ -780,8 +778,8 @@ var View3D = (function () {
       }
       for (var i = 0; i < pts.length; i++) {
         var a = pts[i], c = pts[(i + 1) % pts.length];
-        if (shade) { quad(a, c, 0, ao, foot, wall); if (h > ao) quad(a, c, ao, h, wall, wall); }
-        else quad(a, c, 0, h, wall, wall);
+        quad(a, c, 0, ao, foot, wall);
+        if (h > ao) quad(a, c, ao, h, wall, wall);
       }
       THREE.ShapeUtils.triangulateShape(pts, []).forEach(function (t) {
         t.forEach(function (k) { pos.push(pts[k].x, h, -pts[k].y); col.push(roof[0], roof[1], roof[2]); });
@@ -792,10 +790,8 @@ var View3D = (function () {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
       geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
       geo.computeVertexNormals();
-      // 線画: 塗りはごく薄く、形は輪郭線で見せる（地下の経路を隠さない）。陰影: 色と光で形を見せ、輪郭線は控えめに
-      var m = new THREE.Mesh(geo, shade
-        ? new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false })
-        : new THREE.MeshLambertMaterial({ color: css('--bldg'), transparent: true, opacity: 0.13, side: THREE.DoubleSide, depthWrite: false }));
+      // 半透明にして地下の経路を隠さない。輪郭線は控えめに（濃さは applyOpacity で街並みの濃さに合わせる）
+      var m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false }));
       m.userData.city = 'fill'; netMeshes.push(m); scene.add(m);
       var edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), new THREE.LineBasicMaterial({ color: css('--bldg'), transparent: true, opacity: 0.45, depthWrite: false }));
       edges.userData.city = 'edge'; netMeshes.push(edges); scene.add(edges);
@@ -807,14 +803,9 @@ var View3D = (function () {
         nameBox.appendChild(d);
         names.push({ el: d, pos: new THREE.Vector3(n[2], Math.min(n[1], 35) + 2, -n[3]) });
       });
-      if (shade) {
-        // 空からのやわらかい光と、南西の斜め上からの日差し（北は -z、西は -x）。面の向きで明るさがはっきり変わるように
-        scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa2b2, 0.78));
-        var sun = new THREE.DirectionalLight(0xfff4e6, 0.5); sun.position.set(-0.55, 1, 0.65); scene.add(sun);
-      } else {
-        scene.add(new THREE.HemisphereLight(0xffffff, 0x8890a0, 0.85));
-        var sun = new THREE.DirectionalLight(0xffffff, 0.55); sun.position.set(0.5, 1, 0.3); scene.add(sun);
-      }
+      // 空からのやわらかい光と、南西の斜め上からの日差し（北は -z、西は -x）。面の向きで明るさが変わるように
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa2b2, 0.78));
+      var sun = new THREE.DirectionalLight(0xfff4e6, 0.5); sun.position.set(-0.55, 1, 0.65); scene.add(sun);
     }
   }
 
@@ -1392,8 +1383,8 @@ var View3D = (function () {
     netMeshes.forEach(function (m) {
       var u = m.userData, b;
       if (u.city === 'road') b = Math.min(1, 0.35 + cityAlpha * 2.2);
-      else if (u.city === 'fill') b = bldgStyle === 'shade' ? Math.min(0.92, cityAlpha * 2.6) : cityAlpha * 0.55;
-      else if (u.city === 'edge') b = bldgStyle === 'shade' ? cityAlpha * 0.9 : Math.min(0.95, cityAlpha * 1.8);
+      else if (u.city === 'fill') b = Math.min(0.92, cityAlpha * 2.6);
+      else if (u.city === 'edge') b = cityAlpha * 0.9;
       else b = u.base;
       if (sel) {
         // いま歩いている階は濃く、ほかの階は薄く
@@ -1575,15 +1566,6 @@ var View3D = (function () {
   }
 
   // 街並みの表示を切り替えて作り直す（見ている位置はそのまま）
-  function setBldgStyle(s) {
-    bldgStyle = s;
-    try { localStorage.setItem('ekishirube.bldg', s); } catch (e) {}
-    if (!lastArgs || !camera) return;
-    var pos = camera.position.clone(), tgt = controls.target.clone(), keep = sel ? sel.i : -1;
-    build.apply(null, lastArgs.concat([true]));
-    camera.position.copy(pos); controls.target.copy(tgt); controls.update();
-    if (keep >= 0) highlight(keep);
-  }
   function setArrowStyle(s) {
     arrowStyle = s;
     try { localStorage.setItem('ekishirube.arrow', s); } catch (e) {}
@@ -1609,7 +1591,7 @@ var View3D = (function () {
     applyOpacity();
   }
 
-  return { build: build, setArrowStyle: setArrowStyle, get arrowStyle() { return arrowStyle; }, setBldgStyle: setBldgStyle, get bldgStyle() { return bldgStyle; }, setDepth: setDepth, setCity: setCity, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
+  return { build: build, setArrowStyle: setArrowStyle, get arrowStyle() { return arrowStyle; }, setDepth: setDepth, setCity: setCity, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
     set onStep(fn) { onStep = fn; } };
 })();
 
@@ -1718,8 +1700,7 @@ var View3D = (function () {
             '<div class="stage" id="stage"><div class="views">' +
               '<button type="button" data-view="oblique">斜めから</button><button type="button" data-view="side">横から</button><button type="button" data-view="top">真上から</button><button type="button" data-view="play">歩く様子</button>' +
               '<button type="button" id="arrow-toggle" title="案内の矢印の形を切り替える">矢印: ' + (View3D.arrowStyle === 'tube' ? '円柱' : '帯') + '</button>' +
-              (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' +
-                '<button type="button" id="bldg-toggle" title="建物の見せ方を切り替える"' + (View3D.city ? '' : ' hidden') + '>建物: ' + (View3D.bldgStyle === 'shade' ? '陰影' : '線画') + '</button>' : '') +
+              (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
             '</div><div class="knobs"><label class="depth" for="depth">深さ<input type="range" id="depth" min="0.3" max="3" step="0.1" value="' + View3D.depth + '"><output id="depth-v">×' + View3D.depth.toFixed(1) + '</output></label>' +
             (View3D.hasCity ? '<label class="depth" for="city-a" id="city-a-wrap"' + (View3D.city ? '' : ' hidden') + '>街並みの濃さ<input type="range" id="city-a" min="0" max="1" step="0.05" value="' + View3D.cityAlpha + '"><output id="city-a-v">' + Math.round(View3D.cityAlpha * 100) + '%</output></label>' : '') +
             '</div></div></section>' +
@@ -1734,12 +1715,6 @@ var View3D = (function () {
       View3D.setCity(on);
       this.setAttribute('aria-pressed', on); this.textContent = '街並み ' + (on ? '表示中' : '非表示');
       if ($('city-a-wrap')) $('city-a-wrap').hidden = !on;
-      if ($('bldg-toggle')) $('bldg-toggle').hidden = !on;
-    });
-    if ($('bldg-toggle')) $('bldg-toggle').addEventListener('click', function () {
-      var s = View3D.bldgStyle === 'shade' ? 'line' : 'shade';
-      View3D.setBldgStyle(s);
-      this.textContent = '建物: ' + (s === 'shade' ? '陰影' : '線画');
     });
     $('arrow-toggle').addEventListener('click', function () {
       var s = View3D.arrowStyle === 'tube' ? 'band' : 'tube';
