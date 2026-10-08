@@ -963,8 +963,7 @@ var View3D = (function () {
   // 通路網の階ごとに、その階の点がいちばんよく乗る（水平の距離の中央値が 3 m 以内の）床のまとまりの深さに合わせる。
   // あいだは直線でつなぐ。床が数えられないとき（LOD1 の箱）は、建物ごとの一番低い点の
   // 中央値を地下 1 層目に合わせる
-  var ubldCache = {}, ubldReal = {}; // ubldReal: 駅 ID → 地下街から求めた通路網の点の深さ（地下街を表示しているときだけ使う）
-  var realY = null, realLv = null; // いま描いている駅で使う、点ごとの高さと、階の番号 → 高さ（使わないときは null）
+  var ubldCache = {};
   function ubldLevels(meshes, ground, st) {
     // 床（上を向いた水平な面。部品の種類が分かれば FloorSurface・GroundSurface だけ）を集める
     var bins = {}, samples = [], v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
@@ -1040,36 +1039,7 @@ var View3D = (function () {
     });
     if (!kept.length) return null;
     kept.sort(function (a, b) { return b.d - a.d; });
-    return { pts: [[0, 0]].concat(kept.map(function (k) { return [k.d, k.lv]; })), samples: samples }; // pts: [実際の深さ（m）, 階]
-  }
-  // 階の番号 → 実際の深さ（pts の逆。区間ごとの直線、外は隣の区間の傾きのまま伸ばす）
-  function levelToDepth(lv, pts) {
-    if (lv >= 0) return 0;
-    for (var i = 1; i < pts.length; i++) {
-      if (lv >= pts[i][1] || i === pts.length - 1) { var a = pts[i - 1], b = pts[i]; return a[0] + (lv - a[1]) / (b[1] - a[1]) * (b[0] - a[0]); }
-    }
-    return 0;
-  }
-  // 通路網の点ごとの実際の深さ: 真下（水平 2 m 以内）にある地下街の床の深さ。床が上下に重なるときは、階の番号から見込んだ深さに
-  // いちばん近いもの。床が無い点（ホームなど）は、階の番号から見込んだ深さ。地上の点は 0
-  // 元データでは 1 つの階にまとめられた通路の途中で、実際には段差で何 m も下っていることがある（新宿西口 D5: 約 5 m → 18 m）
-  function nodeDepths(st, samples, pts) {
-    var g = {};
-    samples.forEach(function (s) { var k = Math.floor(s[0] / 2) + ',' + Math.floor(s[1] / 2); (g[k] = g[k] || []).push(s); });
-    return st.nodes.map(function (nd) {
-      if (nd[2] >= 0) return 0;
-      var want = levelToDepth(nd[2], pts), x = nd[0], z = -nd[1], cx = Math.floor(x / 2), cz = Math.floor(z / 2), ds = [];
-      for (var i = -1; i <= 1; i++) for (var j = -1; j <= 1; j++) {
-        (g[(cx + i) + ',' + (cz + j)] || []).forEach(function (s) { if (Math.hypot(s[0] - x, s[1] - z) < 2) ds.push(s[2]); });
-      }
-      if (!ds.length) return want;
-      ds.sort(function (a, b) { return a - b; });
-      var groups = [[ds[0]]];
-      for (var k = 1; k < ds.length; k++) { if (ds[k] - groups[groups.length - 1][groups[groups.length - 1].length - 1] > 0.6) groups.push([ds[k]]); else groups[groups.length - 1].push(ds[k]); }
-      var best = want, bestD = 1e9;
-      groups.forEach(function (gp) { if (gp.length < 2) return; var m = gp[Math.floor(gp.length / 2)]; if (Math.abs(m - want) < bestD) { bestD = Math.abs(m - want); best = m; } });
-      return best;
-    });
+    return [[0, 0]].concat(kept.map(function (k) { return [k.d, k.lv]; })); // [実際の深さ（m）, 階]
   }
   function depthToY(d, pts) {
     // 区間ごとの直線。地表より上と、いちばん深いまとまりより下は、隣の区間の傾きのまま伸ばす
@@ -1113,15 +1083,11 @@ var View3D = (function () {
         o.renderOrder = 1; o.userData.city = 'ubld'; o.userData.keep = true;
       });
       mins.sort(function (a, b) { return a - b; });
-      var lv = ubldLevels(meshes, u.ground, st);
-      var pts = (lv && lv.pts) || [[0, 0], [Math.min(-2, mins.length ? mins[Math.floor(mins.length / 2)] : -6), -1]];
-      // 詳しいモデル（LOD4）なら、通路網の点を実際の床の深さに置くための深さも求める
-      var depths = lv && u.lod === 'LOD4' ? nodeDepths(st, lv.samples, pts) : null;
-      return { meshes: meshes, pts: pts, depths: depths };
+      var pts = ubldLevels(meshes, u.ground, st) || [[0, 0], [Math.min(-2, mins.length ? mins[Math.floor(mins.length / 2)] : -6), -1]];
+      return { meshes: meshes, pts: pts };
     });
     ready.then(function (c) {
       if (scene !== myScene) return;
-      if (c.depths && !ubldReal[st.id]) { ubldReal[st.id] = c; rebuildKeep(); return; } // 通路網を地下街の床の深さで描き直す（作り直した方で地下街も重ねる）
       var grp = new THREE.Group();
       c.meshes.forEach(function (o) {
         // いまの階の間隔（LV、深さのつまみで変わる）で高さを置き直す
@@ -1177,8 +1143,7 @@ var View3D = (function () {
     var up = a.y > b.y ? a : b, s = up === a ? -1 : 1;
     up.x += s * hx / h * extra; up.z += s * hz / h * extra;
   }
-  function V(st, i, lift) { var n = st.nodes[i]; return new THREE.Vector3(n[0], (realY ? realY[i] : n[2] * LV) + (lift || 0), -n[1]); }
-  function levelY(lv) { return realLv ? realLv(lv) : lv * LV; }
+  function V(st, i, lift) { var n = st.nodes[i]; return new THREE.Vector3(n[0], n[2] * LV + (lift || 0), -n[1]); }
 
   var labels = []; // 手順を選んだときに薄くする、地図の上のラベル
   function label(text, bg, fg, px, anchorX, pri) {
@@ -1337,10 +1302,6 @@ var View3D = (function () {
     var xs = st.nodes.map(function (n) { return n[0]; }), ys = st.nodes.map(function (n) { return n[1]; });
     var rawSpan = Math.max(Math.max.apply(null, xs) - Math.min.apply(null, xs), Math.max.apply(null, ys) - Math.min.apply(null, ys));
     LV = Math.max(8, rawSpan * 0.075) * depth;
-    // 地下街を表示していて、その駅の床の深さが求まっていれば、通路網を実際の深さで置く
-    var ur = showUbld && ubldReal[st.id];
-    realY = ur ? ur.depths.map(function (d) { return depthToY(d, ur.pts); }) : null;
-    realLv = ur ? function (lv) { return depthToY(levelToDepth(lv, ur.pts), ur.pts); } : null;
     var cWalk = css('--walk'), cMuted = css('--muted'), cInk = css('--ink'), cOedo = css('--oedo'), cExit = css('--exit');
 
     // 経路の表示位置（急な階段は緩やかに。手前の通路はその分短く）。通路網より先に作り、経路が通る階段は通路網も同じ位置で描く
@@ -1418,7 +1379,7 @@ var View3D = (function () {
     platAxis = null;
     st.plats.forEach(function (p) {
       var axis = new THREE.Vector3(p.ax, 0, -p.ay), len = p.max - p.min, tm = (p.min + p.max) / 2;
-      var y = levelY(p.level) - 0.5, isBoard = g.boardPlat && g.boardPlat.id === p.id;
+      var y = p.level * LV - 0.5, isBoard = g.boardPlat && g.boardPlat.id === p.id;
       var rotY = Math.atan2(p.ay, p.ax);
       if (!isBoard) return;
       platAxis = axis.clone();
@@ -1464,7 +1425,7 @@ var View3D = (function () {
     Object.keys(levels).map(Number).forEach(function (z) {
       if (Math.abs(z - Math.round(z)) > 0.01) return;
       var lb = label(Guide.levelName(st, z), null, cMuted, 13, 1, 10); labels.push(lb);
-      lb.position.set(box.min.x - 6, levelY(z), mid.z); scene.add(lb);
+      lb.position.set(box.min.x - 6, z * LV, mid.z); scene.add(lb);
     });
 
     // 経路
@@ -1842,13 +1803,6 @@ var View3D = (function () {
   function setPhotoCity(on) {
     photoCity = on;
     try { localStorage.setItem('ekishirube.photo', on ? '1' : '0'); } catch (e) {}
-    if (!lastArgs || !camera) return;
-    var pos = camera.position.clone(), tgt = controls.target.clone(), keep = sel ? sel.i : -1;
-    build.apply(null, lastArgs.concat([true]));
-    camera.position.copy(pos); controls.target.copy(tgt); controls.update();
-    if (keep >= 0) highlight(keep);
-  }
-  function rebuildKeep() {
     if (!lastArgs || !camera) return;
     var pos = camera.position.clone(), tgt = controls.target.clone(), keep = sel ? sel.i : -1;
     build.apply(null, lastArgs.concat([true]));
