@@ -745,8 +745,10 @@ var View3D = (function () {
   var photoCity = false; // 写真の街並み（お試し）。重いので選んだときだけ読み込む
   try { photoCity = localStorage.getItem('ekishirube.photo') === '1'; } catch (e) {}
   var statusEl = null;
-  var showUbld = false; // 地下街（お試し）。駅によってはデータが多いので選んだときだけ読み込む
-  try { showUbld = localStorage.getItem('ekishirube.ubld') === '1'; } catch (e) {}
+  // 地下街（お試し）: 一旦ボタンごと出さない（2026-10-08 利用者「一旦、地下街（お試し）ボタンも非表示にして」）。戻すときは true に
+  var UBLD_ENABLED = false;
+  var showUbld = false; // 駅によってはデータが多いので選んだときだけ読み込む
+  try { showUbld = UBLD_ENABLED && localStorage.getItem('ekishirube.ubld') === '1'; } catch (e) {}
   var sel = null;       // いま選んでいる手順 { i, lo, hi, curve, ring }
   var ripple = null, routePts = [], lastCull = 0, compass = null, lastHeading = null, names = [], nameBox = null;
   var renderer, scene, camera, controls, el, ro, started = false;
@@ -1940,7 +1942,7 @@ var View3D = (function () {
     applyOpacity();
   }
 
-  return { build: build, setDepth: setDepth, setCity: setCity, setPhotoCity: setPhotoCity, get photoCity() { return photoCity; }, setUbld: setUbld, get ubld() { return showUbld; }, hasUbld: function (st) { return !!(st && window.UBLD && UBLD.stations && UBLD.stations[st.id]); }, get hasPhoto() { return !!(window.TILES && TILES.stations); }, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
+  return { build: build, setDepth: setDepth, setCity: setCity, setPhotoCity: setPhotoCity, get photoCity() { return photoCity; }, setUbld: setUbld, get ubld() { return showUbld; }, hasUbld: function (st) { return !!(UBLD_ENABLED && st && window.UBLD && UBLD.stations && UBLD.stations[st.id]); }, get ubldEnabled() { return UBLD_ENABLED; }, get hasPhoto() { return !!(window.TILES && TILES.stations); }, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
     set onStep(fn) { onStep = fn; } };
 })();
 
@@ -2492,7 +2494,7 @@ var View3D = (function () {
 
   if (window.CITY && CITY.year) $('city-credit').textContent = '建物・建物の名前・道路：「3D都市モデル（Project PLATEAU）東京都23区（' + CITY.year + '年度）」（国土交通省）を加工して作成。建物の高さは実測の値で、地下の深さ（強調あり）とは縮尺が違います。' +
     (window.TILES ? '写真の街並み（お試し）の地面：地理院タイル（シームレス空中写真）（国土地理院）。' : '') +
-    (window.UBLD ? '地下街（お試し）：同じ PLATEAU の地下街モデル（深さは通路網の階に合わせて伸ばしています）。' : '');
+    (window.UBLD && View3D.ubldEnabled ? '地下街（お試し）：同じ PLATEAU の地下街モデル（深さは通路網の階に合わせて伸ばしています）。' : '');
   // 初期状態: 大門駅 A3出入口 → 4番線（赤羽橋方面）
   // 共有リンク（URL の指定）があればそれ、無ければ前回の選択、それも無ければ大門駅 A3出入口 → 4番線
   var saved = urlChoice() || loadChoice(), start = -1;
