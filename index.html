@@ -1723,7 +1723,8 @@ var View3D = (function () {
   // 種類ごとにまとめて 1 つの面と輪郭の線にする。手順を選ぶと、ほかの階の床は通路網と同じく薄くなる（userData.lv）
   function addSpaces(list) {
     var cWalk = css('--walk'), cMuted = css('--muted'), cSel = css('--sel');
-    var STYLE = { w: [cWalk, 0.13], wt: [cSel, 0.12], s: [cMuted, 0.32], e: [cMuted, 0.32], v: [cMuted, 0.4], r: [cMuted, 0.25], t: [cSel, 0.28] };
+    // 通路網の線の代わりに床の形で見せるので、通路は少し濃く（2026-10-09。前は 0.13）
+    var STYLE = { w: [cWalk, 0.24], wt: [cSel, 0.22], s: [cMuted, 0.38], e: [cMuted, 0.38], v: [cMuted, 0.45], r: [cMuted, 0.3], t: [cSel, 0.32] };
     var fills = {}, lines = {};
     list.forEach(function (sp) {
       var lv = sp[0], kind = sp[1] === 'w' && sp[2] ? 'wt' : sp[1], y = levelY(lv) - 0.35, key = lv + '|' + kind;
@@ -1744,8 +1745,8 @@ var View3D = (function () {
     });
     Object.keys(lines).forEach(function (lv) {
       var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(lines[lv], 3));
-      var m = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: cMuted, transparent: true, opacity: 0.35, depthWrite: false }));
-      m.userData.base = 0.35; m.userData.lv = [Number(lv), Number(lv)]; netMeshes.push(m); scene.add(m);
+      var m = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: cMuted, transparent: true, opacity: 0.5, depthWrite: false }));
+      m.userData.base = 0.5; m.userData.lv = [Number(lv), Number(lv)]; netMeshes.push(m); scene.add(m);
     });
   }
   function setSpaces(on) {
@@ -1967,6 +1968,30 @@ var View3D = (function () {
     });
 
     // 通路網（データ全体）
+    // 構内図を表示しているときは、構内図の床の上にある平らな通路は線を描かない（床の形で見せる）。階段・エスカレーター・エレベーターの線は
+    // 階と階のつながりなので残し、床の無い区域（出入口の外・構内図に無い通路）は線で補う（2026-10-09 利用者「その方針で進めて」:
+    // GTFS-Pathways は経路と手順に使い、図は構内図で描く）
+    var mapPolys = showSpaces && window.SPACES && SPACES[st.id] ? SPACES[st.id] : null;
+    function onMap(x, y, lv) {
+      return mapPolys.some(function (p) {
+        if (Math.abs(p[0] - lv) > 0.01) return false;
+        var inside = function (r) {
+          var c = false;
+          for (var i = 0, j = r.length / 2 - 1; i < r.length / 2; j = i++) {
+            var xi = r[2 * i], yi = r[2 * i + 1], xj = r[2 * j], yj = r[2 * j + 1];
+            if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+          }
+          return c;
+        };
+        return inside(p[3]) && !p.slice(4).some(inside);
+      });
+    }
+    function linkOnMap(l) {
+      var A = st.nodes[l[0]], B = st.nodes[l[1]];
+      if (Math.abs(A[2] - B[2]) > 0.01) return false;
+      for (var t = 0; t <= 1.0001; t += 0.25) if (!onMap(A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2])) return false;
+      return true;
+    }
     var pass = {}, vert = {}, shafts = [];
     st.links.forEach(function (l) {
       var a = V(st, l[0]), b = V(st, l[1]);
@@ -1975,6 +2000,7 @@ var View3D = (function () {
       if (l[2] === 5 && Math.abs(a.y - b.y) > 0.1) { shafts.push([a, b, Math.min(za, zb), Math.max(za, zb)]); return; }
       if (hl < 0.3) return;
       var isV = (l[2] === 2 || l[2] === 4) && Math.abs(a.y - b.y) > 0.1;
+      if (!isV && mapPolys && linkOnMap(l)) return;
       if (isV) {
         var rv = routeVert[l[0] + '-' + l[1]];
         if (rv) { a = rv[0]; b = rv[1]; } else easeLink(a, b, l[0], l[1]);
