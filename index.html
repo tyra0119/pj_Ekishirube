@@ -736,10 +736,9 @@ var Guide = (function () {
 // 立体表示: 通路網を帯、経路を管で描く。高さ = 階層 × LV（強調）
 var View3D = (function () {
   var LV = 7;
-  var depth = 0.5, lastArgs = null; // 深さの倍率（利用者が調整）と、作り直し用の引数
+  var depth = 0.5, lastArgs = null; // 深さの倍率（×0.5 で固定。2026-10-08 利用者「深さの倍率について、変更できなくしたほうがいいよね？」）と、作り直し用の引数
   var showCity = true; // 地上の街並み（PLATEAU の建物・道路）
   try { if (localStorage.getItem('ekishirube.city') === '0') showCity = false; } catch (e) {}
-  try { var saved = parseFloat(localStorage.getItem('ekishirube.depth2')); if (saved > 0) depth = saved; } catch (e) {}
   var cityAlpha = 0.15; // 街並みの濃さ（0〜1。利用者が調整）
   try { var ca = parseFloat(localStorage.getItem('ekishirube.cityAlpha')); if (ca >= 0 && ca <= 1) cityAlpha = ca; } catch (e) {}
   var photoCity = false; // 写真の街並み（お試し）。重いので選んだときだけ読み込む
@@ -1509,6 +1508,21 @@ var View3D = (function () {
     return new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: opacity, side: THREE.DoubleSide, depthWrite: false }));
   }
 
+  // 出発・到着のピン（画面上で一定の大きさ。下の先がその場所）
+  function pinSprite(text, color, px) {
+    var c = document.createElement('canvas'); c.width = 160; c.height = 200;
+    var x = c.getContext('2d');
+    function shape() { x.beginPath(); x.arc(80, 74, 66, Math.PI * 0.8, Math.PI * 0.2); x.lineTo(80, 194); x.closePath(); }
+    shape(); x.fillStyle = '#ffffff'; x.fill();
+    x.save(); x.translate(80, 80); x.scale(0.9, 0.9); x.translate(-80, -80); shape(); x.fillStyle = color; x.fill(); x.restore();
+    x.fillStyle = '#ffffff'; x.font = '900 40px "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", sans-serif';
+    x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(text, 80, 76);
+    var tex = new THREE.CanvasTexture(c); tex.minFilter = THREE.LinearFilter;
+    var s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false, transparent: true, sizeAttenuation: false }));
+    var hh = px / ((el && el.clientHeight) || 440) * 2 * Math.tan(THREE.MathUtils.degToRad(19));
+    s.scale.set(hh * 160 / 200, hh, 1); s.center.set(0.5, 0.02); s.renderOrder = 14;
+    return s;
+  }
   // 人のマーク（緑の丸に白い人。画面上で一定の大きさ）
   function personSprite(color, px) {
     var c = document.createElement('canvas'); c.width = 128; c.height = 128;
@@ -1845,11 +1859,14 @@ var View3D = (function () {
       segTubes.push(grp); scene.add(grp);
     });
 
-    // 始点と終点
-    [[from, pts[0]], [to, pts[pts.length - 1]]].forEach(function (pair) {
+    // 出発と目的地: 地図アプリのようなピン（出発は濃い紺に白で「出発」、目的地は赤に白で「到着」）。先がその場所を指す。
+    // 画面上でいつも同じ大きさで、通路や建物に隠れない。場所には同じ色の小さな玉
+    [[from, pts[0], '出発', css('--sign')], [to, pts[pts.length - 1], '到着', '#d23a3a']].forEach(function (pair) {
       var ep = pair[0], p = pair[1];
-      var ball = new THREE.Mesh(new THREE.SphereGeometry(1.8, 16, 12), new THREE.MeshBasicMaterial({ color: cInk }));
+      var ball = new THREE.Mesh(new THREE.SphereGeometry(1.0, 16, 12), new THREE.MeshBasicMaterial({ color: pair[3] }));
       ball.position.copy(p); scene.add(ball);
+      var pin = pinSprite(pair[2], pair[3], 54);
+      pin.position.copy(p); pin.userData.pin = true; scene.add(pin);
       if (ep.type === 'plat') {
         var pl = st.plats.filter(function (x) { return x.id === ep.id; })[0];
         var lb = label(pl.code + '番線', cOedo, '#ffffff', 18, null, 60); labels.push(lb);
@@ -2333,14 +2350,14 @@ var View3D = (function () {
       '<div class="main">' +
         '<div class="side"><div id="navbox"></div>' +
         '<section class="panel" aria-labelledby="h-steps"><h2 id="h-steps">歩く順番</h2><p class="hint">押すと、そこから 1 手順ずつ案内します。</p>' + stepsHTML(g) + '</section></div>' +
-          '<section class="panel p3d" aria-labelledby="h-3d"><h2 id="h-3d">立体で見る</h2><p class="hint" title="マウスは左ドラッグで移動、右ドラッグで回転、ホイールで拡大します（スマホは 1 本指で回転、2 本指で拡大・移動）。右上の方位マークを押すと北が上になります。地上の建物は実際の高さです。手順を押すとその場所に寄ります。高さは見やすいように強調していて、左下の「深さ」で変えられます。">マウスは左ドラッグで移動、右ドラッグで回転、ホイールで拡大します（スマホは 1 本指で回転、2 本指で拡大・移動）。右上の方位マークを押すと北が上になります。地上の建物は実際の高さです。手順を押すとその場所に寄ります。高さは見やすいように強調していて、左下の「深さ」で変えられます。</p>' +
+          '<section class="panel p3d" aria-labelledby="h-3d"><h2 id="h-3d">立体で見る</h2><p class="hint" title="マウスは左ドラッグで移動、右ドラッグで回転、ホイールで拡大します（スマホは 1 本指で回転、2 本指で拡大・移動）。右上の方位マークを押すと北が上になります。地上の建物は実際の高さです。手順を押すとその場所に寄ります。高さは見やすいように強調しています。">マウスは左ドラッグで移動、右ドラッグで回転、ホイールで拡大します（スマホは 1 本指で回転、2 本指で拡大・移動）。右上の方位マークを押すと北が上になります。地上の建物は実際の高さです。手順を押すとその場所に寄ります。高さは見やすいように強調しています。</p>' +
             '<div class="stage" id="stage"><div class="views">' +
               '<button type="button" data-view="oblique">斜めから</button><button type="button" data-view="side">横から</button><button type="button" data-view="top">真上から</button><button type="button" data-view="play">歩く様子</button>' +
               (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
               (View3D.hasPhoto ? '<button type="button" id="photo-toggle" aria-pressed="' + View3D.photoCity + '" title="PLATEAU の写真付きの建物と、航空写真の地面に切り替える（データが多いので通信に注意）"' + (View3D.city ? '' : ' hidden') + '>写真の街並み（お試し）</button>' : '') +
               (View3D.hasUbld(st) ? '<button type="button" id="ubld-toggle" aria-pressed="' + View3D.ubld + '" title="PLATEAU の地下街モデル（壁・床・天井）を重ねる。深さは通路網の階に合わせて伸ばしている">地下街（お試し）</button>' : '') +
               (View3D.canFpv(st) ? '<button type="button" id="fpv-toggle" aria-pressed="' + View3D.fpv + '" title="地下街の中を人の目の高さで歩いて見る。床の↑と壁の案内板で進む向きを示す">中から見る（お試し）</button>' : '') +
-            '</div><div class="knobs"><label class="depth" for="depth">深さ<input type="range" id="depth" min="0.3" max="3" step="0.1" value="' + View3D.depth + '"><output id="depth-v">×' + View3D.depth.toFixed(1) + '</output></label>' +
+            '</div><div class="knobs">' +
             (View3D.hasCity ? '<label class="depth" for="city-a" id="city-a-wrap"' + (View3D.city ? '' : ' hidden') + '>街並みの濃さ<input type="range" id="city-a" min="0" max="1" step="0.05" value="' + View3D.cityAlpha + '"><output id="city-a-v">' + Math.round(View3D.cityAlpha * 100) + '%</output></label>' : '') +
             '</div></div></section>' +
       '<div class="figs2">' +
@@ -2380,11 +2397,6 @@ var View3D = (function () {
     });
     $('nav-start').addEventListener('click', function () { startNav(0); });
     $('share').addEventListener('click', shareRoute);
-    $('depth').addEventListener('input', function () {
-      var k = parseFloat(this.value);
-      $('depth-v').textContent = '×' + k.toFixed(1);
-      View3D.setDepth(k);
-    });
     document.querySelectorAll('[data-view]').forEach(function (b) {
       b.addEventListener('click', function () { View3D.view(b.dataset.view); if ($('fpv-toggle')) $('fpv-toggle').setAttribute('aria-pressed', View3D.fpv); });
     });
