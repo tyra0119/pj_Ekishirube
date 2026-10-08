@@ -1410,12 +1410,17 @@ var View3D = (function () {
       } else fixedU = i === 0 ? 0 : 1; // 出発・到着は、その場所で前を見る
     }
     fpvWalk = { curve: routeCurve, len: total, u0: u0, u1: u1, s: performance.now(), d: fixedU !== null ? 1 : Math.max(2500, (u1 - u0) * total / 2.4 * 1000), fixedU: fixedU, whole: i < 0 };
-    fpvLook = null;
+    fpvLook = null; lastPlayStep = -1;
   }
   function updateFpv(now) {
     if (!fpvWalk) return;
     var w = fpvWalk, u = w.fixedU !== null ? w.fixedU : w.u0 + (w.u1 - w.u0) * Math.min(1, (now - w.s) / w.d);
     w.u = u; // 到着のピンの濃さに使う（残りの道のり）
+    // 経路全体を歩くときは、左の歩く順番をいま歩いている手順に合わせる（「歩く様子」と同じ。2026-10-08 利用者「リアル視点は連動していない。連動してほしい」）
+    if (w.whole && w.fixedU === null) {
+      var ws = u >= 1 ? -1 : stepAt(u);
+      if (ws !== lastPlayStep) { lastPlayStep = ws; if (onStep) onStep(ws); }
+    }
     var p = w.curve.getPointAt(u), ahead = Math.min(1, u + 5 / Math.max(5, w.len)), q;
     if (ahead - u < 1e-3) { var tg = w.curve.getTangentAt(Math.min(0.999, u)); q = p.clone().add(new THREE.Vector3(tg.x, 0, tg.z).normalize().multiplyScalar(5)); }
     else q = w.curve.getPointAt(ahead);
