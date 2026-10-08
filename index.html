@@ -196,7 +196,7 @@ footer a { color: inherit; }
 .lv-txt { fill: var(--muted); font-size: 12px; font-family: var(--f-body); }
 .route { fill: none; stroke: var(--oedo); stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
 .route.walk { stroke: var(--walk); stroke-width: 3; }
-.seg-g { cursor: default; }
+.seg-g { cursor: pointer; }
 .seg-g.on .route, .seg-g.on .route.walk { stroke: var(--sel); stroke-width: 7; }
 .dist { fill: var(--muted); font-size: 11px; font-family: var(--f-num); font-weight: 600; }
 .evbox { fill: var(--surface); stroke: var(--oedo); stroke-width: 2; }
@@ -226,6 +226,11 @@ footer a { color: inherit; }
 .share { font: inherit; font-weight: 700; font-size: 14px; padding: 9px 14px; border-radius: 10px; cursor: pointer;
   border: 1px solid var(--line); background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; gap: 6px; }
 .share:hover { border-color: var(--sel); color: var(--sel); }
+/* 自動で歩く（進め方: 案内をはじめる = 手動、自動で歩く = 自動。見え方は立体図の上のボタン） */
+.auto { font: inherit; font-weight: 700; font-size: 14px; padding: 9px 14px; border-radius: 10px; cursor: pointer; white-space: nowrap;
+  border: 1px solid var(--sel); background: var(--surface); color: var(--sel); }
+.auto:hover { filter: brightness(1.08); }
+.auto[aria-pressed="true"] { background: var(--sel); color: #fff; }
 .toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); translate: -50% 0; z-index: 30; pointer-events: none;
   background: var(--ink); color: var(--bg); font-size: 14px; padding: 8px 16px; border-radius: 999px; opacity: 0; transition: opacity .2s; }
 .toast.on { opacity: 1; }
@@ -1523,7 +1528,9 @@ var View3D = (function () {
     if (ripple && on) ripple.visible = false;
     var keep = sel ? sel.i : -1;
     highlight(keep);
-    if (on) fpvStart(keep);
+    // リアル視点は見え方の切り替えだけ。手順を選んでいればその区間を、選んでいなければ出発地点に立って前を見る（歩き出さない。
+    // 経路全体を歩くのは「自動で歩く」。2026-10-08 利用者「進め方を左、見え方を上」）
+    if (on) fpvStart(keep >= 0 ? keep : 0);
     else { fpvWalk = null; focus(keep); }
   }
 
@@ -2540,7 +2547,7 @@ var View3D = (function () {
         '<section class="panel" aria-labelledby="h-steps"><h2 id="h-steps">歩く順番</h2><p class="hint">押すと、そこから 1 手順ずつ案内します。</p>' + stepsHTML(g) + '</section></div>' +
           '<section class="panel p3d" aria-labelledby="h-3d"><h2 id="h-3d">立体で見る</h2><p class="hint" title="マウスは左ドラッグで移動、右ドラッグで回転、ホイールで拡大します（スマホは 1 本指で回転、2 本指で拡大・移動）。右上の方位マークを押すと北が上になります。地上の建物は実際の高さです。手順を押すとその場所に寄ります。高さは見やすいように強調しています。">マウスは左ドラッグで移動、右ドラッグで回転、ホイールで拡大します（スマホは 1 本指で回転、2 本指で拡大・移動）。右上の方位マークを押すと北が上になります。地上の建物は実際の高さです。手順を押すとその場所に寄ります。高さは見やすいように強調しています。</p>' +
             '<div class="stage" id="stage"><div class="views">' +
-              '<button type="button" data-view="oblique">斜めから</button><button type="button" data-view="side">横から</button><button type="button" data-view="top">真上から</button><button type="button" data-view="play">歩く様子</button>' +
+              '<button type="button" data-view="oblique">斜めから</button><button type="button" data-view="side">横から</button><button type="button" data-view="top">真上から</button>' +
               (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
               (View3D.hasPhoto ? '<button type="button" id="photo-toggle" aria-pressed="' + View3D.photoCity + '" title="PLATEAU の写真付きの建物と、航空写真の地面に切り替える（データが多いので通信に注意）"' + (View3D.city ? '' : ' hidden') + '>写真の街並み</button>' : '') +
               (View3D.hasSpaces(st) ? '<button type="button" id="smap-toggle" aria-pressed="' + View3D.spaces + '" title="国土交通省の構内地図データから、通路・階段・エスカレーターなどの床の形を階ごとに描く">構内図</button>' : '') +
@@ -2590,6 +2597,11 @@ var View3D = (function () {
       View3D.setCityAlpha(a);
     });
     $('nav-start').addEventListener('click', function () { startNav(0); });
+    // 自動で歩く（前の「歩く様子」）。2026-10-08 利用者「左にボタンを集めた方がいいのではないか」→ 進め方（手動・自動）を左に、見え方を立体図の上に
+    $('auto-walk').addEventListener('click', function () {
+      View3D.view('play');
+      if (window.innerWidth < 900 && $('stage')) $('stage').scrollIntoView({ behavior: 'smooth', block: 'center' }); // スマホは立体図が下にあるので見せる
+    });
     $('share').addEventListener('click', shareRoute);
     document.querySelectorAll('[data-view]').forEach(function (b) {
       b.addEventListener('click', function () { View3D.view(b.dataset.view); if ($('fpv-toggle')) $('fpv-toggle').setAttribute('aria-pressed', View3D.fpv); });
@@ -2611,7 +2623,8 @@ var View3D = (function () {
       '<div style="display:grid;gap:6px;min-width:0">' +
         '<div class="route-line">' + epBadge(from) + '<span aria-hidden="true">→</span><span class="sr-only" style="position:absolute;left:-9999px">から</span>' + epBadge(to) + '</div>' +
         '<div class="chips">' + chips.join('') + '</div>' +
-      '</div><div class="acts"><button type="button" class="start" id="nav-start">▶ 案内をはじめる</button>' +
+      '</div><div class="acts"><button type="button" class="start" id="nav-start" title="1 手順ずつ「つぎへ」で進める">▶ 案内をはじめる</button>' +
+      '<button type="button" class="auto" id="auto-walk" aria-pressed="false" title="経路全体を自動で歩いて見せる（リアル視点のときは目の高さで）">▶ 自動で歩く</button>' +
       '<button type="button" class="share" id="share" title="この案内のリンクを送る（開くと同じ案内が出ます）">' + icon('share', 16) + '共有</button></div></div>';
   }
 
@@ -2927,32 +2940,24 @@ var View3D = (function () {
   // 手順と断面図を連動させる
   function bindHover() {
     var lis = document.querySelectorAll('ol.steps li'), gs = document.querySelectorAll('.seg-g');
-    // 「歩く様子」の再生中は、ボタンを「■ 止める」にする（もう一度押すと止まる）
+    // 「自動で歩く」の再生中は、ボタンを「■ 止める」にする（もう一度押すと止まる）
     View3D.onPlay = function (on) {
-      var b = document.querySelector('[data-view="play"]'); if (!b) return;
-      b.textContent = on ? '■ 止める' : '歩く様子';
+      var b = $('auto-walk'); if (!b) return;
+      b.textContent = on ? '■ 止める' : '▶ 自動で歩く';
       b.setAttribute('aria-pressed', on);
-      b.title = on ? '歩く様子を止める' : '';
+      b.title = on ? '自動で歩くのを止める' : '経路全体を自動で歩いて見せる（リアル視点のときは目の高さで）';
     };
     View3D.onStep = function (i) {
       lis.forEach(function (l) { l.classList.toggle('on', +l.dataset.i === i); });
       gs.forEach(function (gg) { gg.classList.toggle('on', +gg.dataset.i === i); });
       View3D.highlight(i);
     };
-    function set(i) {
-      if (i < 0) i = state.nav;
-      lis.forEach(function (l) { l.classList.toggle('on', +l.dataset.i === i); });
-      gs.forEach(function (gg) { gg.classList.toggle('on', +gg.dataset.i === i); });
-      View3D.highlight(i);
-    }
+    // マウスを重ねただけでは変えない。押したらその手順の案内を出す（2026-10-08 利用者「マウスカーソルを重ねるだけで、その案内が表示されるのはやめたい」）
     lis.forEach(function (l) {
-      l.addEventListener('mouseenter', function () { set(+l.dataset.i); });
-      l.addEventListener('mouseleave', function () { set(-1); });
       l.addEventListener('click', function () { startNav(+l.dataset.i); });
     });
     gs.forEach(function (gg) {
-      gg.addEventListener('mouseenter', function () { set(+gg.dataset.i); });
-      gg.addEventListener('mouseleave', function () { set(-1); });
+      gg.addEventListener('click', function () { startNav(+gg.dataset.i); });
     });
   }
 
