@@ -1214,9 +1214,168 @@ var View3D = (function () {
         grp.add(o); netMeshes.push(o);
       });
       scene.add(grp);
+      ubldGroup = grp;
+      if (u.lod === 'LOD4') { buildFpvSigns(); if (fpv) fpvStart(sel ? sel.i : -1); } // 中から見るときの案内板
       setStatus('');
       applyOpacity();
     }).catch(function () { delete ubldCache[st.id]; setStatus('地下街を読み込めませんでした'); });
+  }
+
+  // ---------- 中から見る（お試し、地下街の詳しいモデルがある新宿西口だけ）----------
+  // 人の目の高さで、手順の区間（手順を選んでいなければ経路全体）をたどる。地下街は透明にせず、ふつうの壁・床・天井として描く。
+  // 案内は駅の案内サインと同じ考え方: 平らな通路の床に約 4 m おきに「↑」、曲がり角は進む先の壁に「← 左へ」「右へ →」、
+  // 階段・エスカレーター・エレベーターの入口に「↓ 階段」などの案内板。浮いている矢印・札・経路の線は隠す
+  var fpv = false, fpvWalk = null, fpvSigns = null, ubldGroup = null, routeDisp = null, routeEdges = null, fpvLook = null;
+  var EYE = 1.6; // 目の高さ（m）
+  var fpvTex = {};
+  // 案内板: 矢印（left・right・down・up）は文字ではなく図形で描く（書体に矢印の記号が無いことがある）
+  function signTexture(text, color, arrow) {
+    var key = text + color + (arrow || '');
+    if (fpvTex[key]) return fpvTex[key];
+    var c = document.createElement('canvas'); c.width = 512; c.height = 192;
+    var x = c.getContext('2d');
+    x.fillStyle = color; x.beginPath();
+    if (x.roundRect) x.roundRect(6, 6, 500, 180, 28); else x.rect(6, 6, 500, 180);
+    x.fill();
+    x.strokeStyle = '#ffffff'; x.lineWidth = 6; x.stroke();
+    x.fillStyle = '#ffffff'; x.font = '900 88px "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", sans-serif';
+    x.textAlign = 'center'; x.textBaseline = 'middle';
+    var tw = x.measureText(text).width, aw = arrow ? 110 : 0, gap = arrow ? 24 : 0, total = tw + aw + gap;
+    var left = arrow === 'right' ? 256 - total / 2 : 256 - total / 2 + aw + gap; // 右矢印は文字の後ろ、ほかは前
+    x.fillText(text, left + tw / 2, 100);
+    if (arrow) {
+      var ax = arrow === 'right' ? 256 + total / 2 - aw / 2 : 256 - total / 2 + aw / 2, ay = 96;
+      x.save(); x.translate(ax, ay); x.rotate({ up: 0, right: Math.PI / 2, down: Math.PI, left: -Math.PI / 2 }[arrow]);
+      x.beginPath(); x.moveTo(0, -52); x.lineTo(46, 0); x.lineTo(17, 0); x.lineTo(17, 52); x.lineTo(-17, 52); x.lineTo(-17, 0); x.lineTo(-46, 0); x.closePath();
+      x.fill(); x.restore();
+    }
+    var t = new THREE.CanvasTexture(c); t.anisotropy = 4;
+    return fpvTex[key] = t;
+  }
+  function floorArrowTexture() {
+    if (fpvTex.floor) return fpvTex.floor;
+    var c = document.createElement('canvas'); c.width = 128; c.height = 192;
+    var x = c.getContext('2d');
+    x.beginPath(); x.moveTo(64, 8); x.lineTo(120, 76); x.lineTo(84, 76); x.lineTo(84, 184); x.lineTo(44, 184); x.lineTo(44, 76); x.lineTo(8, 76); x.closePath();
+    x.fillStyle = css('--sel'); x.fill(); x.strokeStyle = '#ffffff'; x.lineWidth = 7; x.lineJoin = 'round'; x.stroke();
+    var t = new THREE.CanvasTexture(c); t.anisotropy = 8;
+    return fpvTex.floor = t;
+  }
+  function isVertEdge(ed) { return ed.mode === 2 || ed.mode === 4 || ed.mode === 5; }
+  // 点 k から経路に沿って dist m 進んだ（dir=-1 なら戻った）位置
+  function alongPath(P, k, dist, dir) {
+    var cur = P[k].clone(), left = dist;
+    for (var j = k + dir; j >= 0 && j < P.length; j += dir) {
+      var len = cur.distanceTo(P[j]);
+      if (len >= left) return cur.lerp(P[j], left / len);
+      left -= len; cur = P[j].clone();
+    }
+    return cur;
+  }
+  function flatDir(a, b) { var d = new THREE.Vector3(b.x - a.x, 0, b.z - a.z); return d.lengthSq() < 1e-6 ? null : d.normalize(); }
+  function signMesh(text, color, w, arrow) {
+    var m = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 192 / 512), new THREE.MeshBasicMaterial({ map: signTexture(text, color, arrow), side: THREE.DoubleSide, transparent: true, polygonOffset: true, polygonOffsetFactor: -4 }));
+    m.renderOrder = 7;
+    return m;
+  }
+  // 案内板を、進む向きの先の壁（地下街の面）に貼る。壁が見つからなければ 2.5 m 先に浮かせる
+  var ray = null;
+  function placeOnWall(m, origin, dir) {
+    ray = ray || new THREE.Raycaster();
+    ray.set(origin, dir); ray.near = 0.3; ray.far = 14;
+    var hit = ubldGroup ? ray.intersectObjects(ubldGroup.children, false)[0] : null;
+    var pos = hit ? hit.point.clone().sub(dir.clone().multiplyScalar(0.08)) : origin.clone().add(dir.clone().multiplyScalar(2.5));
+    m.position.copy(pos);
+    m.lookAt(pos.clone().sub(dir)); // 表を歩いてくる人の方へ
+    // 近い壁では小さく（目の前いっぱいにならないように）。4 m 以上先なら元の大きさ
+    m.scale.setScalar(Math.max(0.45, Math.min(1, (hit ? hit.distance : 2.5) / 4)));
+  }
+  function buildFpvSigns() {
+    if (fpvSigns) { scene.remove(fpvSigns); fpvSigns = null; }
+    if (!routeDisp || !routeEdges) return;
+    var grp = new THREE.Group(), P = routeDisp.map(function (p) { return new THREE.Vector3(p.x, p.y - 0.8, p.z); }), E = routeEdges;
+    grp.visible = fpv;
+    scene.updateMatrixWorld(true);
+    // 床の「↑」: 平らな通路に約 4 m おき
+    var acc = 2, ftex = floorArrowTexture();
+    E.forEach(function (ed, i) {
+      var a = P[i], b = P[i + 1], d = flatDir(a, b), len = Math.hypot(b.x - a.x, b.z - a.z);
+      if (isVertEdge(ed) || Math.abs(a.y - b.y) > 0.3 || !d || len < 0.01) { acc = 2; return; }
+      for (var t = acc; t < len; t += 4) {
+        var m = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.5), new THREE.MeshBasicMaterial({ map: ftex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4 }));
+        m.rotation.order = 'YXZ'; m.rotation.set(-Math.PI / 2, Math.atan2(-d.x, -d.z), 0);
+        m.position.set(a.x + d.x * t, a.y + a.y * 0 + (b.y - a.y) * (t / len) + 0.05, a.z + d.z * t);
+        m.renderOrder = 6; grp.add(m);
+        acc = t;
+      }
+      acc = Math.max(0.5, (acc + 4) - len);
+    });
+    // 曲がり角: 手前 3 m と先 3 m の向きが 40 度より変わる所。進む先の壁に「← 左へ」「右へ →」
+    var lastTurn = -99;
+    for (var k = 1; k < P.length - 1; k++) {
+      if (isVertEdge(E[k - 1]) || isVertEdge(E[k])) continue;
+      var din = flatDir(alongPath(P, k, 3, -1), P[k]), dout = flatDir(P[k], alongPath(P, k, 3, 1));
+      if (!din || !dout) continue;
+      var ang = Math.atan2(din.x * dout.z - din.z * dout.x, din.x * dout.x + din.z * dout.z); // 正: 上から見て時計回り（右）
+      if (Math.abs(ang) < 40 * Math.PI / 180 || k - lastTurn < 2) continue;
+      lastTurn = k;
+      var right = ang > 0, s = signMesh(right ? '右へ' : '左へ', css('--sel'), 2.2, right ? 'right' : 'left');
+      placeOnWall(s, new THREE.Vector3(P[k].x, P[k].y + 1.9, P[k].z), din);
+      grp.add(s);
+    }
+    // 階段・エスカレーター・エレベーターの入口
+    E.forEach(function (ed, i) {
+      if (!isVertEdge(ed) || (i > 0 && isVertEdge(E[i - 1]))) return;
+      var a = P[i], j = i; while (j < E.length && isVertEdge(E[j])) j++;
+      var b = P[j], down = b.y < a.y - 0.1, up = b.y > a.y + 0.1;
+      var name = ed.mode === 2 ? '階段' : ed.mode === 4 ? 'エスカレーター' : 'エレベーター';
+      var dir = flatDir(i > 0 ? alongPath(P, i, 2, -1) : a, a) || flatDir(a, b) || new THREE.Vector3(0, 0, -1);
+      var s = signMesh(name, '#1c2333', name.length > 3 ? 2.2 : 1.6, down ? 'down' : up ? 'up' : null);
+      s.position.set(a.x + dir.x * 1.5, a.y + 2.7, a.z + dir.z * 1.5);
+      s.lookAt(s.position.clone().sub(dir));
+      grp.add(s);
+    });
+    fpvSigns = grp; scene.add(grp);
+  }
+  // 区間をたどる: i が手順の番号（出発・到着は、その場所で止まって前を見る）、-1 なら経路全体
+  function fpvStart(i) {
+    var curve = null, fixedU = null;
+    if (i >= 0) {
+      var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
+      if (t) curve = t.userData.curve;
+      else { curve = routeCurve; fixedU = i === 0 ? 0 : 1; }
+    } else curve = routeCurve;
+    if (!curve) return;
+    var len = curve.getLength();
+    fpvWalk = { curve: curve, len: len, s: performance.now(), d: fixedU !== null ? 1 : Math.max(2500, len / 2.4 * 1000), fixedU: fixedU };
+    fpvLook = null;
+  }
+  function updateFpv(now) {
+    if (!fpvWalk) return;
+    var w = fpvWalk, u = w.fixedU !== null ? w.fixedU : Math.min(1, (now - w.s) / w.d);
+    var p = w.curve.getPointAt(u), ahead = Math.min(1, u + 5 / Math.max(5, w.len)), q;
+    if (ahead - u < 1e-3) { var tg = w.curve.getTangentAt(Math.min(0.999, u)); q = p.clone().add(new THREE.Vector3(tg.x, 0, tg.z).normalize().multiplyScalar(5)); }
+    else q = w.curve.getPointAt(ahead);
+    var eye = new THREE.Vector3(p.x, p.y - 0.8 + EYE, p.z), look = new THREE.Vector3(q.x, q.y - 0.8 + EYE - 0.7, q.z);
+    if (look.distanceToSquared(eye) < 0.01) look.add(new THREE.Vector3(0, 0, -1));
+    camera.position.lerp(eye, 0.2);
+    fpvLook = fpvLook ? fpvLook.lerp(look, 0.12) : look.clone();
+    camera.lookAt(fpvLook);
+  }
+  function setFpv(on) {
+    if (on === fpv) return;
+    fpv = on;
+    play = null; anim = null;
+    controls.enabled = !on;
+    camera.fov = on ? 72 : 38; camera.near = on ? 0.1 : 1; camera.updateProjectionMatrix();
+    if (fpvSigns) fpvSigns.visible = on;
+    if (routeTube) routeTube.visible = !on;
+    if (dot) dot.visible = !on && (!sel || !!play);
+    if (ripple && on) ripple.visible = false;
+    var keep = sel ? sel.i : -1;
+    highlight(keep);
+    if (on) fpvStart(keep);
+    else { fpvWalk = null; focus(keep); }
   }
 
   function css(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || '#888888'; }
@@ -1433,6 +1592,7 @@ var View3D = (function () {
     var disp = [V(st, g.route.start, 0.8)], edgeIdx = new Map(), routeVert = {};
     g.route.edges.forEach(function (ed, i) { edgeIdx.set(ed, i); disp.push(V(st, ed.b, 0.8)); });
     easeStairs(disp, g.route.edges);
+    routeDisp = disp; routeEdges = g.route.edges; ubldGroup = null; fpvSigns = null; // 中から見るときの案内板用
     function dispA(ed) { return edgeIdx.has(ed) ? disp[edgeIdx.get(ed)].clone() : V(st, ed.a, 0.8); }
     function dispB(ed) { return edgeIdx.has(ed) ? disp[edgeIdx.get(ed) + 1].clone() : V(st, ed.b, 0.8); }
     g.route.edges.forEach(function (ed, i) {
@@ -1709,6 +1869,7 @@ var View3D = (function () {
 
   function setView(kind, instant) {
     if (!home) return;
+    if (fpv) { if (kind === 'play') { fpvStart(-1); return; } setFpv(false); } // 「歩く様子」は中から経路全体をたどる。ほかの視点にしたら外へ
     play = null;
     if (kind === 'play') {
       // 実際にかかる時間の 5 倍速（大門 A3 → 4 番線の約 5 分なら約 60 秒）。最短 15 秒
@@ -1734,13 +1895,16 @@ var View3D = (function () {
       else if (u.city === 'edge') b = photo ? 0 : cityAlpha * 0.9;
       else if (u.city === 'photo') b = alphaCurve(0.6); // 写真の建物: 初めの 15% で 0.6
       else if (u.city === 'photoground') b = u.loaded ? alphaCurve(0.58) : 0;
-      else if (u.city === 'ubld') b = 0.22; // 航空写真: 地下の通路網が透けて見えるように薄め
+      else if (u.city === 'ubld') {
+        b = fpv ? 1 : 0.22;
+        if (u.fpvMat !== fpv) { m.material.transparent = !fpv; m.material.depthWrite = fpv; m.material.needsUpdate = true; u.fpvMat = fpv; } // 中から見るときはふつうの壁・床・天井
+      } // 航空写真: 地下の通路網が透けて見えるように薄め
       else b = u.base;
       if (sel) {
         // いま歩いている階は濃く、ほかの階は薄く
         if (u.lv) b = (u.lv[1] >= sel.lo - 0.01 && u.lv[0] <= sel.hi + 0.01) ? Math.min(1, b * 1.6) : b * 0.25;
         // 案内中は建物を消す（経路に被らないように）。道路は地上にかかる手順だけ、場所の手がかりとして薄く残す
-        else if (u.city === 'ubld') b = 0.12; // 地下街は案内中も、地下の空間の手がかりとして薄く残す
+        else if (u.city === 'ubld') b = fpv ? 1 : 0.12; // 地下街は案内中も、地下の空間の手がかりとして薄く残す（中から見るときは透明にしない）
         else b = (u.city === 'road' && sel.hi > -0.01) ? b * 0.35 : 0; // 写真の街並み（建物・航空写真）は案内中はすべて消す
       }
       m.material.opacity = b;
@@ -1750,7 +1914,7 @@ var View3D = (function () {
 
   function highlight(i) {
     var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
-    segTubes.forEach(function (s) { s.visible = s === t; });
+    segTubes.forEach(function (s) { s.visible = s === t && !fpv; });
     sel = null;
     if (t) sel = { i: i, lo: t.userData.lo, hi: t.userData.hi, curve: t.userData.curve, ring: t.userData.vert ? t.userData.start : null, tubeTex: t.userData.tubeTex, walker: t.userData.walker, walkCurve: t.userData.walkCurve };
     else if (i >= 0 && lastArgs && routePts.length) {
@@ -1767,14 +1931,15 @@ var View3D = (function () {
       l.material.opacity = on && !l.userData.step && l.userData.pri < 50 ? 0.35 : 1; // 出発・到着の出入口と番線は薄くしない
       if (l.userData.stem) l.userData.stem.material.opacity = on ? 0.15 : 0.45;
     });
-    if (ripple) { ripple.visible = !!(sel && sel.ring); if (sel && sel.ring) ripple.position.copy(sel.ring).add(new THREE.Vector3(0, 0.3, 0)); }
-    if (dot) dot.visible = !on || !!play;
+    if (routeTube) routeTube.visible = !fpv;
+    if (ripple) { ripple.visible = !!(sel && sel.ring) && !fpv; if (sel && sel.ring) ripple.position.copy(sel.ring).add(new THREE.Vector3(0, 0.3, 0)); }
+    if (dot) dot.visible = (!on || !!play) && !fpv;
     applyOpacity();
   }
 
   // 建物の名前の札を置く。画面の中ならその場所、外なら端（上のボタンと下のつまみを避ける）に向きの矢印つきで
   function placeNames() {
-    var show = !sel && showCity && cityAlpha > 0.02;
+    var show = !sel && !fpv && showCity && cityAlpha > 0.02;
     nameBox.hidden = !show;
     if (!show) return;
     var W = el.clientWidth, H = el.clientHeight, top = 84, bottom = H - 96, left = 12, right = W - 12, cx = W / 2, cy = (top + bottom) / 2;
@@ -1799,6 +1964,7 @@ var View3D = (function () {
 
   // 画面上で重なるラベルは、優先度の高いものだけ残す
   function cullLabels() {
+    if (fpv) { labels.forEach(function (l) { l.material.visible = false; if (l.userData.stem) l.userData.stem.visible = false; }); return; }
     var H = el.clientHeight, W = el.clientWidth, placed = [];
     var shown = labels.filter(function (l) {
       for (var o = l; o; o = o.parent) if (!o.visible) return false;
@@ -1821,6 +1987,7 @@ var View3D = (function () {
 
   function focus(i) {
     if (!home) return;
+    if (fpv) { fpvStart(i); return; } // 中から見るときは、その区間を目の高さでたどる
     if (i < 0) { lastFocus = null; setView('oblique'); return; }
     var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
     var center, size;
@@ -1862,7 +2029,8 @@ var View3D = (function () {
     requestAnimationFrame(loop);
     if (!scene || !el || !el.isConnected) return;
     var now = performance.now();
-    if (anim) {
+    if (fpv) updateFpv(now);
+    else if (anim) {
       var k = Math.min(1, (now - anim.s) / anim.d), e = k < 0.5 ? 2 * k * k : 1 - Math.pow(-2 * k + 2, 2) / 2;
       controls.target.lerpVectors(anim.t0, anim.t1, e);
       var r = anim.a.r + (anim.b.r - anim.a.r) * e, az = anim.a.az + anim.daz * e, elv = anim.a.el + (anim.b.el - anim.a.el) * e; // el は描く要素なので別名
@@ -1892,7 +2060,7 @@ var View3D = (function () {
       ripple.scale.setScalar(3 + ph * 9);
       ripple.material.opacity = 0.9 * (1 - ph);
     }
-    controls.update();
+    if (!fpv) controls.update();
     if (now - lastCull > 120) { lastCull = now; scene.updateMatrixWorld(); cullLabels(); }
     if (nameBox) placeNames();
     if (compass) {
@@ -1942,6 +2110,7 @@ var View3D = (function () {
     if (keep >= 0) highlight(keep);
   }
   function setUbld(on) {
+    if (!on && fpv) setFpv(false);
     showUbld = on;
     try { localStorage.setItem('ekishirube.ubld', on ? '1' : '0'); } catch (e) {}
     if (!lastArgs || !camera) return;
@@ -1956,7 +2125,7 @@ var View3D = (function () {
     applyOpacity();
   }
 
-  return { build: build, setDepth: setDepth, setCity: setCity, setPhotoCity: setPhotoCity, get photoCity() { return photoCity; }, setUbld: setUbld, get ubld() { return showUbld; }, hasUbld: function (st) { return !!(UBLD_ENABLED && st && window.UBLD && UBLD.stations && UBLD.stations[st.id]); }, get ubldEnabled() { return UBLD_ENABLED; }, get hasPhoto() { return !!(window.TILES && TILES.stations); }, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
+  return { build: build, setDepth: setDepth, setCity: setCity, setPhotoCity: setPhotoCity, get photoCity() { return photoCity; }, setUbld: setUbld, get ubld() { return showUbld; }, setFpv: function (on) { if (camera) setFpv(on); }, get fpv() { return fpv; }, canFpv: function (st) { return !!(UBLD_ENABLED && st && window.UBLD && UBLD.stations && UBLD.stations[st.id] && UBLD.stations[st.id].lod === 'LOD4'); }, hasUbld: function (st) { return !!(UBLD_ENABLED && st && window.UBLD && UBLD.stations && UBLD.stations[st.id]); }, get ubldEnabled() { return UBLD_ENABLED; }, get hasPhoto() { return !!(window.TILES && TILES.stations); }, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
     set onStep(fn) { onStep = fn; } };
 })();
 
@@ -2112,6 +2281,7 @@ var View3D = (function () {
               (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
               (View3D.hasPhoto ? '<button type="button" id="photo-toggle" aria-pressed="' + View3D.photoCity + '" title="PLATEAU の写真付きの建物と、航空写真の地面に切り替える（データが多いので通信に注意）"' + (View3D.city ? '' : ' hidden') + '>写真の街並み（お試し）</button>' : '') +
               (View3D.hasUbld(st) ? '<button type="button" id="ubld-toggle" aria-pressed="' + View3D.ubld + '" title="PLATEAU の地下街モデル（壁・床・天井）を重ねる。深さは通路網の階に合わせて伸ばしている">地下街（お試し）</button>' : '') +
+              (View3D.canFpv(st) ? '<button type="button" id="fpv-toggle" aria-pressed="' + View3D.fpv + '" title="地下街の中を人の目の高さで歩いて見る。床の↑と壁の案内板で進む向きを示す">中から見る（お試し）</button>' : '') +
             '</div><div class="knobs"><label class="depth" for="depth">深さ<input type="range" id="depth" min="0.3" max="3" step="0.1" value="' + View3D.depth + '"><output id="depth-v">×' + View3D.depth.toFixed(1) + '</output></label>' +
             (View3D.hasCity ? '<label class="depth" for="city-a" id="city-a-wrap"' + (View3D.city ? '' : ' hidden') + '>街並みの濃さ<input type="range" id="city-a" min="0" max="1" step="0.05" value="' + View3D.cityAlpha + '"><output id="city-a-v">' + Math.round(View3D.cityAlpha * 100) + '%</output></label>' : '') +
             '</div></div></section>' +
@@ -2132,6 +2302,13 @@ var View3D = (function () {
       var on = !View3D.ubld;
       View3D.setUbld(on);
       this.setAttribute('aria-pressed', on);
+      if ($('fpv-toggle')) $('fpv-toggle').setAttribute('aria-pressed', View3D.fpv);
+    });
+    if ($('fpv-toggle')) $('fpv-toggle').addEventListener('click', function () {
+      var on = !View3D.fpv;
+      if (on && !View3D.ubld) { View3D.setUbld(true); if ($('ubld-toggle')) $('ubld-toggle').setAttribute('aria-pressed', true); } // 中から見るには地下街が要る
+      View3D.setFpv(on);
+      this.setAttribute('aria-pressed', View3D.fpv);
     });
     if ($('photo-toggle')) $('photo-toggle').addEventListener('click', function () {
       var on = !View3D.photoCity;
@@ -2151,7 +2328,7 @@ var View3D = (function () {
       View3D.setDepth(k);
     });
     document.querySelectorAll('[data-view]').forEach(function (b) {
-      b.addEventListener('click', function () { View3D.view(b.dataset.view); });
+      b.addEventListener('click', function () { View3D.view(b.dataset.view); if ($('fpv-toggle')) $('fpv-toggle').setAttribute('aria-pressed', View3D.fpv); });
     });
     bindHover();
   }
