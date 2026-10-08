@@ -1879,10 +1879,10 @@ var View3D = (function () {
     if (city && photoCity) addPhotoCity(st, setStatusOf('photo'));
     if (showUbld) addUnderground(st, setStatusOf('ubld'));
     if (showSpaces && window.SPACES && SPACES[st.id]) addSpaces(SPACES[st.id]);
-    // トイレ（構内地図のある駅だけ）。その階の高さに、マークを立てる（3 下から細い線）
+    // トイレ（構内地図のある駅だけ）。マークの下の端を、その階の床（構内図の面と同じ高さ）に置く（2026-10-08 利用者「トイレの位置が空中に浮いてるように感じる」。前は床の 2.5 上）
     (st.toilets || []).forEach(function (t) {
       var ty = levelY(t[2]), wc = toiletSprite(26);
-      wc.position.set(t[0], ty + 2.5, -t[1]); labels.push(wc); scene.add(wc);
+      wc.position.set(t[0], ty - 0.35, -t[1]); labels.push(wc); scene.add(wc);
     });
 
     // ホーム: 乗るホームは8両分に区切り、乗る位置の車両を塗る
