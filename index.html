@@ -1392,10 +1392,34 @@ var View3D = (function () {
     return cur;
   }
   function flatDir(a, b) { var d = new THREE.Vector3(b.x - a.x, 0, b.z - a.z); return d.lengthSq() < 1e-6 ? null : d.normalize(); }
+  // リアル視点のトイレの案内板（濃い紺の地に、白い男女の絵と「トイレ」）
+  var fpvWcTex = null;
+  function fpvToiletTexture() {
+    if (fpvWcTex) return fpvWcTex;
+    var c = document.createElement('canvas'); c.width = 320; c.height = 128;
+    var x = c.getContext('2d');
+    x.fillStyle = css('--sign'); x.beginPath(); x.moveTo(20, 4); x.arcTo(316, 4, 316, 124, 16); x.arcTo(316, 124, 4, 124, 16); x.arcTo(4, 124, 4, 4, 16); x.arcTo(4, 4, 316, 4, 16); x.fill();
+    x.fillStyle = '#ffffff';
+    function head(cx) { x.beginPath(); x.arc(cx, 32, 10, 0, Math.PI * 2); x.fill(); }
+    head(36); head(80);
+    x.fillRect(26, 46, 20, 32); x.fillRect(27, 78, 7, 30); x.fillRect(38, 78, 7, 30);
+    x.beginPath(); x.moveTo(80, 44); x.lineTo(98, 84); x.lineTo(62, 84); x.closePath(); x.fill(); x.fillRect(72, 84, 6, 24); x.fillRect(82, 84, 6, 24);
+    x.fillRect(57, 26, 2, 82);
+    x.font = '900 56px "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", sans-serif'; x.textBaseline = 'middle'; x.fillText('トイレ', 118, 68);
+    fpvWcTex = new THREE.CanvasTexture(c); fpvWcTex.minFilter = THREE.LinearFilter;
+    return fpvWcTex;
+  }
+  // 案内板。裏から見ると文字が左右反転していたので、表と裏に同じ絵を貼った 2 枚にする（2026-10-08）。
+  // 「← 左へ」「右へ →」は裏から見ると向きが逆の意味になるので、表だけ（裏からは見えない）
   function signMesh(text, color, w, arrow) {
-    var m = new THREE.Mesh(new THREE.PlaneGeometry(w, w * 192 / 512), new THREE.MeshBasicMaterial({ map: signTexture(text, color, arrow), side: THREE.DoubleSide, transparent: true, polygonOffset: true, polygonOffsetFactor: -4 }));
-    m.renderOrder = 7;
-    return m;
+    var geo = new THREE.PlaneGeometry(w, w * 192 / 512);
+    var mat = new THREE.MeshBasicMaterial({ map: signTexture(text, color, arrow), side: THREE.FrontSide, transparent: true, polygonOffset: true, polygonOffsetFactor: -4 });
+    var g = new THREE.Group(), front = new THREE.Mesh(geo, mat);
+    front.renderOrder = 7; g.add(front);
+    if (arrow !== 'left' && arrow !== 'right') {
+      var back = new THREE.Mesh(geo, mat); back.rotation.y = Math.PI; back.renderOrder = 7; g.add(back);
+    }
+    return g;
   }
   // 案内板を、進む向きの先の壁（地下街の面）に貼る。壁が見つからなければ 2.5 m 先に浮かせる
   var ray = null;
@@ -1479,6 +1503,22 @@ var View3D = (function () {
       gate.add(s);
       grp.add(gate);
     });
+    // トイレ（構内地図のある駅）: 天井近く（床から 2.4 m）に掛かった案内板。いつも見る人の方を向き、壁の向こうなら壁に隠れる
+    // （2026-10-08 利用者「リアル視点でもトイレを表示できる？」。外から見るときの札・マークはリアル視点では隠している）
+    (curSt && curSt.toilets || []).forEach(function (t) {
+      var best = -1, bd = 15;
+      curSt.nodes.forEach(function (n, i) { // 床の高さは、同じ階のいちばん近い通路網の点から
+        if (Math.abs(n[2] - t[2]) > 0.01) return;
+        var d = Math.hypot(n[0] - t[0], n[1] - t[1]); if (d < bd) { bd = d; best = i; }
+      });
+      var fy = best >= 0 ? V(curSt, best).y : levelY(t[2]);
+      // 壁の向こうでも見える目印にする（トイレの場所は通路から離れていることが多い）。40 m より遠ければ出さない（updateFpv）
+      // 画面上でいつも同じ大きさ（高さ約 34 px。遠いと小さすぎて読めなかった）。リアル視点の視野は 72 度
+      var sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: fpvToiletTexture(), transparent: true, depthTest: false, opacity: 0.9, sizeAttenuation: false }));
+      var wh = 34 / ((el && el.clientHeight) || 440) * 2 * Math.tan(THREE.MathUtils.degToRad(36));
+      sp.scale.set(wh * 2.5, wh, 1); sp.position.set(t[0], fy + 2.4, -t[1]); sp.renderOrder = 15; sp.userData.wc = true;
+      grp.add(sp);
+    });
     fpvSigns = grp; scene.add(grp);
   }
   // 区間をたどる: i が手順の番号（出発・到着は、その場所で止まって前を見る）、-1 なら経路全体
@@ -1502,6 +1542,7 @@ var View3D = (function () {
     if (!fpvWalk) return;
     var w = fpvWalk, u = w.fixedU !== null ? w.fixedU : w.u0 + (w.u1 - w.u0) * Math.min(1, (now - w.s) / w.d);
     w.u = u; // 到着のピンの濃さに使う（残りの道のり）
+    if (fpvSigns) fpvSigns.children.forEach(function (c) { if (c.userData.wc) c.visible = c.position.distanceTo(camera.position) < 40; }); // 遠いトイレは出さない
     // 経路全体を歩くときは、左の歩く順番をいま歩いている手順に合わせる（「歩く様子」と同じ。2026-10-08 利用者「リアル視点は連動していない。連動してほしい」）
     if (w.whole && w.fixedU === null) {
       var ws = u >= 1 ? -1 : stepAt(u);
@@ -2254,7 +2295,13 @@ var View3D = (function () {
 
   function focus(i) {
     if (!home) return;
-    if (fpv) { fpvStart(i); return; } // 中から見るときは、その区間を目の高さでたどる
+    if (fpv) {
+      // リアル視点: 手順ならその区間を目の高さでたどる。手順を外したとき（案内を × で閉じたなど）は、その場で止まる
+      // （前は経路全体を歩き出していた。2026-10-08 利用者「リアル視点で…移動中に×を押すと、自動案内がはじまる」）
+      if (i >= 0) fpvStart(i);
+      else if (fpvWalk) fpvWalk.fixedU = fpvWalk.u != null ? fpvWalk.u : fpvWalk.u0;
+      return;
+    }
     if (i < 0) { lastFocus = null; setView('oblique'); return; }
     var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
     var center, size;
