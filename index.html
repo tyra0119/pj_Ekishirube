@@ -861,15 +861,17 @@ var View3D = (function () {
   function loadTile(url) {
     if (photoCache[url]) return photoCache[url];
     return photoCache[url] = fetch(url).then(function (r) { if (!r.ok) throw new Error(r.status); return r.arrayBuffer(); }).then(function (buf) {
-      var dv = new DataView(buf), glb = buf, center = [0, 0, 0];
+      var dv = new DataView(buf), glb = buf, center = [0, 0, 0], ftype = null;
       if (dv.getUint32(0, true) === 0x6d643362) { // 'b3dm': 見出しと表を飛ばして中の glb を取り出す
         var ftj = dv.getUint32(12, true), off = 28 + ftj + dv.getUint32(16, true) + dv.getUint32(20, true) + dv.getUint32(24, true);
         if (ftj) { var ft = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 28, ftj))); if (ft.RTC_CENTER) center = ft.RTC_CENTER; }
+        var btj = dv.getUint32(20, true); // 属性表（部品の種類 feature_type など。地下街で床だけを数えるのに使う）
+        if (btj) { try { var bt = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 28 + ftj + dv.getUint32(16, true), btj))); if (Array.isArray(bt.feature_type)) ftype = bt.feature_type; } catch (e) {} }
         glb = buf.slice(off);
       }
       var gv = new DataView(glb), jl = gv.getUint32(12, true), json = JSON.parse(new TextDecoder().decode(new Uint8Array(glb, 20, jl)));
       if (json.extensions && json.extensions.CESIUM_RTC) center = json.extensions.CESIUM_RTC.center;
-      return new Promise(function (ok, ng) { gltfLoader.parse(glb, '', function (g) { ok({ scene: g.scene, center: center }); }, ng); });
+      return new Promise(function (ok, ng) { gltfLoader.parse(glb, '', function (g) { ok({ scene: g.scene, center: center, ftype: ftype }); }, ng); });
     });
   }
   // 地面の航空写真: 駅の範囲にかかる地理院タイル（ズーム 18、多いときは 17）を 1 枚の画像に並べ、地面に貼る
@@ -957,45 +959,87 @@ var View3D = (function () {
   // ---------- 地下街（お試し）----------
   // PLATEAU の地下街モデル（ubld、3D Tiles）を読み込み、地下の空間を半透明で重ねる。一覧は data/ubld.json（scripts/plateau-ubld.mjs）。
   // 通路網の深さは実際の深さではなく階の順番を一定の間隔で並べたものなので、地下街の深さを区間ごとに合わせる:
-  // 上を向いた床の面積を深さ 0.5 m ごとに数え、いちばん多い深さ（地下街の階）を地下 1 層目に、それより深い床のまとまりを
-  // 順に地下 2 層目・3 層目…に合わせ、あいだは直線でつなぐ。床が数えられないとき（LOD1 の箱）は、建物ごとの一番低い点の
+  // 床（部品の種類が FloorSurface・GroundSurface の上を向いた面）を深さ 0.5 m ごとに数えて床のまとまり（深さ）を出し、
+  // 通路網の階ごとに、その階の点がいちばんよく乗る（水平の距離の中央値が 3 m 以内の）床のまとまりの深さに合わせる。
+  // あいだは直線でつなぐ。床が数えられないとき（LOD1 の箱）は、建物ごとの一番低い点の
   // 中央値を地下 1 層目に合わせる
   var ubldCache = {};
-  function ubldLevels(meshes, ground) {
-    var bins = {}, v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+  function ubldLevels(meshes, ground, st) {
+    // 床（上を向いた水平な面。部品の種類が分かれば FloorSurface・GroundSurface だけ）を集める
+    var bins = {}, samples = [], v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
     meshes.forEach(function (o) {
       var p = o.geometry.attributes.position, idx = o.geometry.index, tri = idx ? idx.count / 3 : p.count / 3;
+      var ft = o.userData.ftype, bid = o.geometry.attributes._batchid;
       for (var t = 0; t < tri; t++) {
         var a = idx ? idx.getX(t * 3) : t * 3, b = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, c = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
         v0.fromBufferAttribute(p, a); v1.fromBufferAttribute(p, b); v2.fromBufferAttribute(p, c);
         n.crossVectors(e1.subVectors(v1, v0), e2.subVectors(v2, v0));
         var len = n.length();
-        if (len < 1e-6 || n.y / len < 0.95) continue; // 上を向いた水平な面（床）だけ
+        if (len < 1e-6 || n.y / len < 0.95) continue; // 上を向いた水平な面だけ
+        if (ft && bid) { var ty = ft[bid.getX(a)]; if (ty !== 'uro:FloorSurface' && ty !== 'uro:GroundSurface') continue; } // 床・地面だけ
         var d = (v0.y + v1.y + v2.y) / 3 - ground;
-        if (d > -2.5 || d < -60) continue;
+        if (d > -1.5 || d < -60) continue;
         var k = Math.round(d * 2) / 2;
         bins[k] = (bins[k] || 0) + len / 2;
+        // 床の広がり（三角形の中の 4 点）
+        [[1 / 3, 1 / 3], [0.6, 0.2], [0.2, 0.6], [0.2, 0.2]].forEach(function (w) {
+          samples.push([v0.x + w[0] * (v1.x - v0.x) + w[1] * (v2.x - v0.x), v0.z + w[0] * (v1.z - v0.z) + w[1] * (v2.z - v0.z), d]);
+        });
       }
     });
-    // 床のまとまり: いちばん多い深さから順に取り、前後 2.5 m は同じまとまりとして除く
+    // 床のまとまり（深さ）: いちばん多い深さから順に取り、前後 2.5 m は同じまとまりとして除く
     var keys = Object.keys(bins).map(Number), peaks = [], top = 0;
     function windowArea(k) { var s = 0; keys.forEach(function (x) { if (Math.abs(x - k) <= 1) s += bins[x]; }); return s; }
-    while (keys.length && peaks.length < 6) {
+    while (keys.length && peaks.length < 8) {
       var best = null, bestA = 0;
       keys.forEach(function (k) { var a = windowArea(k); if (a > bestA) { bestA = a; best = k; } });
-      if (best === null || (top && bestA < top * 0.15)) break;
+      if (best === null || (top && bestA < top * 0.08)) break;
       if (!top) top = bestA;
       var sw = 0, sd = 0;
       keys.forEach(function (x) { if (Math.abs(x - best) <= 1.5) { sw += bins[x]; sd += bins[x] * x; } });
-      peaks.push({ d: sd / sw, a: bestA });
+      peaks.push(sd / sw);
       keys = keys.filter(function (x) { return Math.abs(x - best) > 2.5; });
     }
     if (!peaks.length) return null;
-    var b1 = peaks[0].d; // いちばん多い床 = 地下 1 層目
-    var deeper = peaks.slice(1).filter(function (p) { return p.d < b1 - 2; }).map(function (p) { return p.d; }).sort(function (a, b) { return b - a; });
-    var pts = [[0, 0], [b1, -1]];
-    deeper.forEach(function (d, i) { pts.push([d, -2 - i]); });
-    return pts; // [実際の深さ（m）, 階]
+    // まとまりごとに、床の点を 2 m の升目に入れる（近い床を早く探すため）
+    var grids = peaks.map(function (pd) {
+      var g = {};
+      samples.forEach(function (s) { if (Math.abs(s[2] - pd) < 1.5) { var key = Math.floor(s[0] / 2) + ',' + Math.floor(s[1] / 2); (g[key] = g[key] || []).push(s); } });
+      return g;
+    });
+    function nearest(g, x, z) {
+      var cx = Math.floor(x / 2), cz = Math.floor(z / 2), bestD = 99;
+      for (var i = -4; i <= 4; i++) for (var j = -4; j <= 4; j++) {
+        var c = g[(cx + i) + ',' + (cz + j)]; if (!c) continue;
+        c.forEach(function (s) { var dd = Math.hypot(s[0] - x, s[1] - z); if (dd < bestD) bestD = dd; });
+      }
+      return bestD;
+    }
+    // 通路網の階ごとに、その階の点がいちばんよく乗る床のまとまりを探す（水平の距離の中央値が 3 m 以内）
+    var byLevel = {};
+    st.nodes.forEach(function (nd) { if (nd[2] < 0) (byLevel[nd[2]] = byLevel[nd[2]] || []).push(nd); });
+    var anchors = [];
+    Object.keys(byLevel).forEach(function (lv) {
+      var nds = byLevel[lv];
+      if (nds.length < 3) return;
+      var bestI = -1, bestM = 3;
+      peaks.forEach(function (pd, i) {
+        var ds = nds.map(function (nd) { return nearest(grids[i], nd[0], -nd[1]); }).sort(function (a, b) { return a - b; });
+        var m = ds[Math.floor(ds.length / 2)];
+        if (m < bestM) { bestM = m; bestI = i; }
+      });
+      if (bestI >= 0) anchors.push({ lv: +lv, d: peaks[bestI], m: bestM });
+    });
+    // 浅い階から順に、深さも深くなっていくものだけ残す（逆になる組は、合い方の悪い方を除く）
+    anchors.sort(function (a, b) { return a.m - b.m; });
+    var kept = [];
+    anchors.forEach(function (an) {
+      var ok = kept.every(function (k) { return (an.lv < k.lv) === (an.d < k.d) && an.lv !== k.lv && Math.abs(an.d - k.d) > 0.5; });
+      if (ok) kept.push(an);
+    });
+    if (!kept.length) return null;
+    kept.sort(function (a, b) { return b.d - a.d; });
+    return [[0, 0]].concat(kept.map(function (k) { return [k.d, k.lv]; })); // [実際の深さ（m）, 階]
   }
   function depthToY(d, pts) {
     // 区間ごとの直線。地表より上と、いちばん深いまとまりより下は、隣の区間の傾きのまま伸ばす
@@ -1026,7 +1070,7 @@ var View3D = (function () {
         var holder = new THREE.Group();
         holder.matrixAutoUpdate = false; holder.matrix.copy(tileMatrix(st, r.center));
         holder.add(r.scene); holder.updateMatrixWorld(true);
-        r.scene.traverse(function (o) { if (o.isMesh) meshes.push(o); });
+        r.scene.traverse(function (o) { if (o.isMesh) { o.userData.ftype = r.ftype; meshes.push(o); } });
       });
       var mins = [];
       meshes.forEach(function (o) {
@@ -1039,7 +1083,7 @@ var View3D = (function () {
         o.renderOrder = 1; o.userData.city = 'ubld'; o.userData.keep = true;
       });
       mins.sort(function (a, b) { return a - b; });
-      var pts = ubldLevels(meshes, u.ground) || [[0, 0], [Math.min(-2, mins.length ? mins[Math.floor(mins.length / 2)] : -6), -1]];
+      var pts = ubldLevels(meshes, u.ground, st) || [[0, 0], [Math.min(-2, mins.length ? mins[Math.floor(mins.length / 2)] : -6), -1]];
       return { meshes: meshes, pts: pts };
     });
     ready.then(function (c) {
