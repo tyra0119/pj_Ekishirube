@@ -817,7 +817,7 @@ var View3D = (function () {
   // PLATEAU の建物（LOD2・テクスチャ付きの 3D Tiles）を PLATEAU の配信元から読み込み、地面には国土地理院の航空写真（シームレス空中写真）を貼る。
   // タイルの一覧は data/tiles.json（scripts/plateau-tiles.mjs）。読み込んだタイルは駅を作り直しても使い回す
   var TJS = 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/';
-  var photoCache = {}, photoState = { ready: false }, gltfLoader = null, scriptPromises = {};
+  var photoCache = {}, photoState = { ready: false, grp: null }, gltfLoader = null, scriptPromises = {};
   function loadScript(src) {
     return scriptPromises[src] = scriptPromises[src] || new Promise(function (ok, ng) {
       var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = function () { ng(new Error(src)); };
@@ -938,7 +938,7 @@ var View3D = (function () {
       mins.sort(function (a, b) { return a - b; });
       grp.position.y = -(mins.length ? mins[Math.floor(mins.length / 2)] : 0);
       scene.add(grp);
-      photoState.ready = true;
+      photoState.ready = true; photoState.grp = grp;
       setStatus('');
       applyOpacity();
     }).catch(function () { setStatus('写真の街並みを読み込めませんでした'); });
@@ -1147,7 +1147,7 @@ var View3D = (function () {
       grid.material.opacity = 0.05;
       addCity(city);
     }
-    photoState.ready = false;
+    photoState.ready = false; photoState.grp = null;
     var oldS = el.querySelector('.cstatus'); if (oldS) oldS.remove();
     statusEl = document.createElement('div'); statusEl.className = 'cstatus'; statusEl.hidden = true; el.appendChild(statusEl);
     if (city && photoCity) addPhotoCity(st, function (t) { if (statusEl) { statusEl.textContent = t; statusEl.hidden = !t; } });
@@ -1372,6 +1372,7 @@ var View3D = (function () {
 
   // 不透明度を、街並みの濃さと、選んでいる手順の階に合わせて決める
   function applyOpacity() {
+    if (photoState.grp) photoState.grp.visible = !sel; // 写真の建物は案内中はまとめて消す
     netMeshes.forEach(function (m) {
       var u = m.userData, b;
       var photo = photoCity && photoState.ready;
@@ -1385,7 +1386,7 @@ var View3D = (function () {
         // いま歩いている階は濃く、ほかの階は薄く
         if (u.lv) b = (u.lv[1] >= sel.lo - 0.01 && u.lv[0] <= sel.hi + 0.01) ? Math.min(1, b * 1.6) : b * 0.25;
         // 案内中は建物を消す（経路に被らないように）。道路は地上にかかる手順だけ、場所の手がかりとして薄く残す
-        else b = ((u.city === 'road' || u.city === 'photoground') && sel.hi > -0.01) ? b * 0.35 : 0;
+        else b = (u.city === 'road' && sel.hi > -0.01) ? b * 0.35 : 0; // 写真の街並み（建物・航空写真）は案内中はすべて消す
       }
       m.material.opacity = b;
       m.visible = b > 0.003;
