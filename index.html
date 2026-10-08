@@ -1371,6 +1371,10 @@ var View3D = (function () {
   }
 
   // 不透明度を、街並みの濃さと、選んでいる手順の階に合わせて決める
+  // 写真の街並みの濃さ: つまみ 0% で 0（消える）、初めの 15% で v15、100% で 1（不透明）。そのあいだは直線でつなぐ
+  function alphaCurve(v15) {
+    return cityAlpha <= 0.15 ? cityAlpha / 0.15 * v15 : v15 + (cityAlpha - 0.15) / 0.85 * (1 - v15);
+  }
   function applyOpacity() {
     if (photoState.grp) photoState.grp.visible = !sel; // 写真の建物は案内中はまとめて消す
     netMeshes.forEach(function (m) {
@@ -1379,8 +1383,8 @@ var View3D = (function () {
       if (u.city === 'road') b = photo ? 0 : Math.min(1, 0.35 + cityAlpha * 2.2); // 写真の街並みでは、道路は地面の写真に写っている
       else if (u.city === 'fill') b = photo ? 0 : Math.min(0.92, cityAlpha * 2.6);
       else if (u.city === 'edge') b = photo ? 0 : cityAlpha * 0.9;
-      else if (u.city === 'photo') b = Math.min(0.95, cityAlpha * 4);
-      else if (u.city === 'photoground') b = u.loaded ? Math.min(1, 0.25 + cityAlpha * 2.2) : 0; // 地下の通路網が透けて見えるように薄め
+      else if (u.city === 'photo') b = alphaCurve(0.6); // 写真の建物: 初めの 15% で 0.6
+      else if (u.city === 'photoground') b = u.loaded ? alphaCurve(0.58) : 0; // 航空写真: 地下の通路網が透けて見えるように薄め
       else b = u.base;
       if (sel) {
         // いま歩いている階は濃く、ほかの階は薄く
