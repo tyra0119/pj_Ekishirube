@@ -1856,8 +1856,10 @@ var View3D = (function () {
         m.rotation.y = rotY;
         scene.add(m);
         if (hl) {
-          var lb = label('前から' + c + '両目', cOedo, '#ffffff', 17, null, 45); labels.push(lb);
-          lb.position.set(m.position.x, y + 3, m.position.z); scene.add(lb);
+          // 札は車両の下側にぶら下げる（到着のピンが上に立つので、重ならないように。2026-10-08 利用者「到着ピンの後ろに『前からｘｘ両目』が隠れてる」）
+          var lb = label(p.code + '番線・前から' + c + '両目', cOedo, '#ffffff', 17, null, 60); labels.push(lb); // 番線の札と 1 つに
+          lb.center.set(0.5, 1.25); lb.userData.ay = 1.25;
+          lb.position.set(m.position.x, y - 0.5, m.position.z); scene.add(lb);
         }
       }
       // 進行方向
@@ -1976,8 +1978,11 @@ var View3D = (function () {
       pinBox.appendChild(pin); pins.push({ pos: p.clone(), el: pin, end: ep === to });
       if (ep.type === 'plat') {
         var pl = st.plats.filter(function (x) { return x.id === ep.id; })[0];
+        // 番線の札は、ピンの下にぶら下げる（ピンに隠れないように）。乗る位置を示すホームなら「前から何両目」の札に入れたので出さない
+        if (g.boardPlat && g.boardPlat.id === pl.id) return;
         var lb = label(pl.code + '番線', cOedo, '#ffffff', 18, null, 60); labels.push(lb);
-        lb.position.set(p.x, p.y + LV * 0.9, p.z); scene.add(lb);
+        lb.center.set(0.5, 1.25); lb.userData.ay = 1.25;
+        lb.position.set(p.x, p.y, p.z); scene.add(lb);
       }
     });
 
@@ -2166,7 +2171,8 @@ var View3D = (function () {
       var ok = v.z < 1;
       if (ok) {
         var x = (v.x + 1) / 2 * W, y = (1 - v.y) / 2 * H, u = l.userData;
-        var r = [x - u.wpx * u.ax - 3, y - u.px - 3, x + u.wpx * (1 - u.ax) + 3, y + 3];
+        var ay = u.ay || 0; // 札の縦の基準（0 = 下の端がその場所、1.25 = 札の上の端が少し下）
+        var r = [x - u.wpx * u.ax - 3, y - u.px * (1 - ay) - 3, x + u.wpx * (1 - u.ax) + 3, y + u.px * ay + 3];
         ok = !placed.some(function (p) { return r[0] < p[2] && r[2] > p[0] && r[1] < p[3] && r[3] > p[1]; });
         if (ok) placed.push(r);
       }
