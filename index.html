@@ -846,9 +846,9 @@ var View3D = (function () {
   var statusEl = null;
   // 地下街: 一旦ボタンごと出さない（2026-10-08 利用者「一旦、地下街（お試し）ボタンも非表示にして」）。戻すときは true に
   var UBLD_ENABLED = true; // 2026-10-08 新宿西口の直したデータで再表示（利用者「このファイルを使い、再度、地下街を表示してみてほしい」）
-  // 構内図: 国土交通省の構内地図データ（Space）の床の形。データのある駅だけ。初めは表示（2026-10-08 利用者「2を進めて」）
+  // 構内図: 国土交通省の構内地図データ（Space）の床の形。データのある駅（12 駅）で常に表示（2026-10-08 利用者「2を進めて」で追加、
+  // 2026-10-09 利用者「常時構内図表示でいいかも」でボタンをなくした。前にボタンで切った端末（ekishirube.smap = 0）でも表示）
   var showSpaces = true;
-  try { showSpaces = localStorage.getItem('ekishirube.smap') !== '0'; } catch (e) {}
   var showUbld = false; // 駅によってはデータが多いので選んだときだけ読み込む
   try { showUbld = UBLD_ENABLED && localStorage.getItem('ekishirube.ubld') === '1'; } catch (e) {}
   var sel = null;       // いま選んでいる手順 { i, lo, hi, curve, ring }
@@ -2733,7 +2733,6 @@ var View3D = (function () {
               '<button type="button" data-view="oblique">斜めから</button><button type="button" data-view="side">横から</button><button type="button" data-view="top">真上から</button>' +
               (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
               (View3D.hasPhoto ? '<button type="button" id="photo-toggle" aria-pressed="' + View3D.photoCity + '" title="PLATEAU の写真付きの建物と、航空写真の地面に切り替える（データが多いので通信に注意）"' + (View3D.city ? '' : ' hidden') + '>写真の街並み</button>' : '') +
-              (View3D.hasSpaces(st) ? '<button type="button" id="smap-toggle" aria-pressed="' + View3D.spaces + '" title="国土交通省の構内地図データから、通路・階段・エスカレーターなどの床の形を階ごとに描く">構内図</button>' : '') +
               (View3D.hasUbld(st) ? '<button type="button" id="ubld-toggle" aria-pressed="' + View3D.ubld + '" title="PLATEAU の地下街モデル（壁・床・天井）を重ねる。深さは通路網の階に合わせて伸ばしている">地下街</button>' : '') +
               (View3D.canFpv(st) ? '<button type="button" id="fpv-toggle" aria-pressed="' + View3D.fpv + '" title="地下街の中を人の目の高さで歩いて見る。床の↑と壁の案内板で進む向きを示す">リアル視点</button>' : '') +
             '</div><div class="knobs">' +
@@ -2758,11 +2757,6 @@ var View3D = (function () {
       this.setAttribute('aria-pressed', on); this.textContent = '街並み ' + (on ? '表示中' : '非表示');
       if ($('city-a-wrap')) $('city-a-wrap').hidden = !on;
       if ($('photo-toggle')) $('photo-toggle').hidden = !on;
-    });
-    if ($('smap-toggle')) $('smap-toggle').addEventListener('click', function () {
-      var on = !View3D.spaces;
-      View3D.setSpaces(on);
-      this.setAttribute('aria-pressed', on);
     });
     if ($('ubld-toggle')) $('ubld-toggle').addEventListener('click', function () {
       var on = !View3D.ubld;
