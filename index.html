@@ -1348,8 +1348,10 @@ var View3D = (function () {
       });
       scene.add(grp);
       ubldGroup = grp;
+      var ucells = ubldCells(grp);
+      drawVert(ucells);
       if (showSpaces && window.SPACES && SPACES[st.id] && spaceObjs.length) {
-        var keep = spacesUnderUbld(SPACES[st.id], ubldCells(grp));
+        var keep = spacesUnderUbld(SPACES[st.id], ucells);
         spaceObjs.forEach(function (m) { scene.remove(m); var k = netMeshes.indexOf(m); if (k >= 0) netMeshes.splice(k, 1); });
         spaceObjs = [];
         addSpaces(keep);
@@ -1731,6 +1733,38 @@ var View3D = (function () {
   // 非表示にすることはできる？」）。地下街の水平な面（床・天井。LOD1 は箱の上下の面）から、2 m 四方のます目ごとに地下街のある高さの範囲を求め、
   // 床の形の内側の点の半分以上が、同じ高さ（前後 2 以内）で地下街のます目に入っていれば描かない
   var spaceObjs = [];
+  // 通路網の階段・エスカレーターの線とエレベーターの柱。地下街を表示しているときは、地下街と重なるものを描かない
+  // （2026-10-09 利用者「被ってる階段やエスカレータも非表示にできる？」）。線の 1/4・1/2・3/4 の点のうち 2 つ以上が、同じ高さ（前後 2 以内）で
+  // 地下街のます目に入っていれば除く。エレベーターは柱の上下の端と中ほど
+  var vertSegs = [], shaftSegs = [], vertObjs = [];
+  function coveredBy(cells, pts) {
+    var hit = 0;
+    pts.forEach(function (p) { var cl = cells[Math.floor(p.x / 2) + ',' + Math.floor(p.z / 2)]; if (cl && p.y >= cl[0] - 2 && p.y <= cl[1] + 2) hit++; });
+    return hit >= 2;
+  }
+  function drawVert(cells) {
+    vertObjs.forEach(function (m) { scene.remove(m); var k = netMeshes.indexOf(m); if (k >= 0) netMeshes.splice(k, 1); });
+    vertObjs = [];
+    var cMuted = css('--muted'), vert = {};
+    vertSegs.forEach(function (sg) {
+      var a = sg[0], b = sg[1];
+      if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }))) return;
+      var dx = b.x - a.x, dz = b.z - a.z, hl = Math.hypot(dx, dz), px = -dz / hl * 0.9, pz = dx / hl * 0.9;
+      (vert[sg[2]] = vert[sg[2]] || []).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
+        a.x - px, a.y, a.z - pz, b.x - px, b.y, b.z - pz, b.x + px, b.y, b.z + pz);
+    });
+    Object.keys(vert).forEach(function (key) {
+      var m = ribbonMesh(vert[key], cMuted, 0.55);
+      m.userData.base = 0.55; m.userData.lv = key.split(':').map(Number); netMeshes.push(m); scene.add(m); vertObjs.push(m);
+    });
+    shaftSegs.forEach(function (s) {
+      if (cells && coveredBy(cells, [0.15, 0.5, 0.85].map(function (t) { return s[0].clone().lerp(s[1], t); }))) return;
+      var h = Math.abs(s[0].y - s[1].y);
+      var m = new THREE.Mesh(new THREE.BoxGeometry(2.4, h, 2.4), new THREE.MeshBasicMaterial({ color: cMuted, transparent: true, opacity: 0.28, depthWrite: false }));
+      m.position.set((s[0].x + s[1].x) / 2, (s[0].y + s[1].y) / 2, (s[0].z + s[1].z) / 2);
+      m.userData.base = 0.28; m.userData.lv = [s[2], s[3]]; netMeshes.push(m); scene.add(m); vertObjs.push(m);
+    });
+  }
   function ubldCells(grp) {
     var cells = {}, C = 2, a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
     function mark(ix, iz, y) { var k = ix + ',' + iz, r = cells[k]; if (!r) cells[k] = [y, y]; else { r[0] = Math.min(r[0], y); r[1] = Math.max(r[1], y); } }
@@ -2046,7 +2080,8 @@ var View3D = (function () {
       for (var t = 0; t <= 1.0001; t += 0.25) if (!onMap(A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2])) return false;
       return true;
     }
-    var pass = {}, vert = {}, shafts = [];
+    var pass = {}, shafts = [];
+    vertSegs = []; vertObjs = [];
     st.links.forEach(function (l) {
       var a = V(st, l[0]), b = V(st, l[1]);
       var za = st.nodes[l[0]][2], zb = st.nodes[l[1]][2], key = Math.min(za, zb) + ':' + Math.max(za, zb);
@@ -2059,24 +2094,19 @@ var View3D = (function () {
         var rv = routeVert[l[0] + '-' + l[1]];
         if (rv) { a = rv[0]; b = rv[1]; } else easeLink(a, b, l[0], l[1]);
         dx = b.x - a.x; dz = b.z - a.z; hl = Math.hypot(dx, dz); if (hl < 0.3) return;
+        vertSegs.push([a.clone(), b.clone(), key]); // 階段・エスカレーターは drawVert で（地下街と重なるものを後で除けるように）
+        return;
       }
-      var w = isV ? 1.8 : 2.6, px = -dz / hl * w / 2, pz = dx / hl * w / 2;
-      var bucket = isV ? vert : pass;
-      (bucket[key] = bucket[key] || []).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
+      var w = 2.6, px = -dz / hl * w / 2, pz = dx / hl * w / 2;
+      (pass[key] = pass[key] || []).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
         a.x - px, a.y, a.z - pz, b.x - px, b.y, b.z - pz, b.x + px, b.y, b.z + pz);
     });
-    [[pass, cWalk, 0.32], [vert, cMuted, 0.55]].forEach(function (b) {
-      Object.keys(b[0]).forEach(function (key) {
-        var m = ribbonMesh(b[0][key], b[1], b[2]);
-        m.userData.base = b[2]; m.userData.lv = key.split(':').map(Number); netMeshes.push(m); scene.add(m);
-      });
+    Object.keys(pass).forEach(function (key) {
+      var m = ribbonMesh(pass[key], cWalk, 0.32);
+      m.userData.base = 0.32; m.userData.lv = key.split(':').map(Number); netMeshes.push(m); scene.add(m);
     });
-    shafts.forEach(function (s) {
-      var h = Math.abs(s[0].y - s[1].y);
-      var m = new THREE.Mesh(new THREE.BoxGeometry(2.4, h, 2.4), new THREE.MeshBasicMaterial({ color: cMuted, transparent: true, opacity: 0.28, depthWrite: false }));
-      m.position.set((s[0].x + s[1].x) / 2, (s[0].y + s[1].y) / 2, (s[0].z + s[1].z) / 2);
-      m.userData.base = 0.28; m.userData.lv = [s[2], s[3]]; netMeshes.push(m); scene.add(m);
-    });
+    shaftSegs = shafts;
+    drawVert(null);
 
     // 範囲
     var box = new THREE.Box3();
