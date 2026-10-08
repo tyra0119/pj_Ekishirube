@@ -1147,12 +1147,24 @@ var View3D = (function () {
     }
     return out;
   }
-  // 直した駅の、深さ → 階の対応: [[0, 0], [階の深さ, 階], ...]（地下の階だけ、浅い順）
+  // 直した駅（点ごとの実際の深さがある）の、深さ → 高さ: 縦の倍率を一定にする（[[0, 0], [いちばん深い階の深さ, その階]]）。
+  // 階ごとに区間を分けると区間ごとに倍率が変わり、階をまたぐ階段・エスカレーターが折れ曲がって見えた
+  // （2026-10-08 利用者「D4〜1番線、標準、6 のエスカレーターについて、地下街データがおかしい（階段がいびつな形）」）。
+  // いちばん深い階が、階の番号で並べたときと同じ高さに来る倍率
   function stationPts(st) {
     if (!st.depth || !st.levelDepth) return null;
-    var pts = [[0, 0]];
-    Object.keys(st.levelDepth).map(Number).filter(function (lv) { return lv < 0; }).sort(function (a, b) { return b - a; }).forEach(function (lv) { pts.push([st.levelDepth[String(lv)], lv]); });
-    return pts.length > 1 ? pts : null;
+    var lvs = Object.keys(st.levelDepth).map(Number).filter(function (lv) { return lv < 0 && st.levelDepth[String(lv)] < 0; });
+    if (!lvs.length) return null;
+    var deep = Math.min.apply(null, lvs);
+    return [[0, 0], [st.levelDepth[String(deep)], deep]];
+  }
+  // 階の高さ（ホーム・階の名前の札）。直した駅は、その階の実際の深さに同じ倍率を掛ける
+  var curSt = null;
+  function levelY(lv) {
+    var pts = curSt && stationPts(curSt);
+    if (!pts) return lv * LV;
+    var d = curSt.levelDepth[String(lv)];
+    return depthToY(d !== undefined ? d : levelToDepth(lv, pts), pts);
   }
   function depthToY(d, pts) {
     // 区間ごとの直線。地表より上と、いちばん深いまとまりより下は、隣の区間の傾きのまま伸ばす
@@ -1624,8 +1636,9 @@ var View3D = (function () {
     // 直した駅（点ごとの深さがある。新宿西口）は、すべての点を実際の深さで置く。深さ → 高さは階ごとの深さで区間ごとに直線に
     // つなぐ（その階の点は階の番号どおりの高さ、あいだの点はあいだに）。地下街も同じ対応で描くので、両者がそろう
     realY = null;
+    curSt = st;
     var sp0 = stationPts(st);
-    if (sp0) { realY = {}; st.depth.forEach(function (d, k) { realY[k] = depthToY(d !== null ? d : levelToDepth(st.nodes[k][2], sp0), sp0); }); }
+    if (sp0) { realY = {}; st.depth.forEach(function (d, k) { realY[k] = d !== null ? depthToY(d, sp0) : levelY(st.nodes[k][2]); }); }
     else {
       // 直していない駅で地下街を表示していて、段のある通路の深さが求まっていれば、その点だけ地下街の床の深さで置く
       var ur = showUbld && ubldReal[st.id];
@@ -1709,7 +1722,7 @@ var View3D = (function () {
     platAxis = null;
     st.plats.forEach(function (p) {
       var axis = new THREE.Vector3(p.ax, 0, -p.ay), len = p.max - p.min, tm = (p.min + p.max) / 2;
-      var y = p.level * LV - 0.5, isBoard = g.boardPlat && g.boardPlat.id === p.id;
+      var y = levelY(p.level) - 0.5, isBoard = g.boardPlat && g.boardPlat.id === p.id;
       var rotY = Math.atan2(p.ay, p.ax);
       if (!isBoard) return;
       platAxis = axis.clone();
@@ -1755,7 +1768,7 @@ var View3D = (function () {
     Object.keys(levels).map(Number).forEach(function (z) {
       if (Math.abs(z - Math.round(z)) > 0.01) return;
       var lb = label(Guide.levelName(st, z), null, cMuted, 13, 1, 10); labels.push(lb);
-      lb.position.set(box.min.x - 6, z * LV, mid.z); scene.add(lb);
+      lb.position.set(box.min.x - 6, levelY(z), mid.z); scene.add(lb);
     });
 
     // 経路
