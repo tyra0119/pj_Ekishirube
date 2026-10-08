@@ -60,6 +60,7 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; } /* つまみなど display を指定した部品でも hidden で隠れるように */
 body { background: var(--bg); color: var(--ink); font-family: var(--f-body); font-size: 15px; line-height: 1.6; margin: 0; }
 .wrap { max-width: 1600px; margin: 0 auto; padding-inline: 16px; padding-block: 0 40px; }
 
@@ -819,9 +820,6 @@ var View3D = (function () {
         nameBox.appendChild(d);
         names.push({ el: d, pos: new THREE.Vector3(n[2], Math.min(n[1], 35) + 2, -n[3]) });
       });
-      // 空からのやわらかい光と、南西の斜め上からの日差し（北は -z、西は -x）。面の向きで明るさが変わるように
-      scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa2b2, 0.78));
-      var sun = new THREE.DirectionalLight(0xfff4e6, 0.5); sun.position.set(-0.55, 1, 0.65); scene.add(sun);
     }
   }
 
@@ -1156,6 +1154,10 @@ var View3D = (function () {
     dispose();
     scene = new THREE.Scene();
     scene.background = new THREE.Color(css('--stage'));
+    // 空からのやわらかい光と、南西の斜め上からの日差し（北は -z、西は -x）。面の向きで明るさが変わるように。
+    // 街並みを消しても地下街などの光を受ける形があるので、いつも置く
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x9aa2b2, 0.78));
+    var sun = new THREE.DirectionalLight(0xfff4e6, 0.5); sun.position.set(-0.55, 1, 0.65); scene.add(sun);
     segTubes = []; netMeshes = []; labels = []; anim = null; play = null; lastFocus = null;
 
     var xs = st.nodes.map(function (n) { return n[0]; }), ys = st.nodes.map(function (n) { return n[1]; });
