@@ -1189,6 +1189,18 @@ var View3D = (function () {
         for (var k = 0; k < p.count; k++) { var b = id ? id.getX(k) : 0; if (!(b in lo) || p.getY(k) < lo[b]) lo[b] = p.getY(k); }
         Object.keys(lo).forEach(function (b) { mins.push(lo[b] - u.ground); });
         o.userData.origY = Float32Array.from({ length: p.count }, function (_, k) { return p.getY(k); });
+        // 実際には無い面は描かない: 閉じ面（ClosureSurface）・部屋の境（uro:Room）は空間の区切りを表すだけで、描くと通路をふさぐ壁に
+        // 見える。扉（Door）も通路の途中にあると前が見えなくなるので描かない（新宿西口の 5 経路で、目の高さで突き抜ける面の 9 割がこれら）
+        var ftv = o.userData.ftype;
+        if (ftv && id) {
+          var HIDE = { 'uro:ClosureSurface': 1, 'uro:Room': 1, 'uro:Door': 1 };
+          var src = o.geometry.index ? o.geometry.index.array : null, n3 = src ? src.length : p.count, keepIdx = [];
+          for (var q = 0; q < n3; q += 3) {
+            var a0 = src ? src[q] : q;
+            if (!HIDE[ftv[id.getX(a0)]]) keepIdx.push(a0, src ? src[q + 1] : q + 1, src ? src[q + 2] : q + 2);
+          }
+          o.geometry.setIndex(keepIdx);
+        }
         o.material = new THREE.MeshLambertMaterial({ color: 0xb9c6dc, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
         o.renderOrder = 1; o.userData.city = 'ubld'; o.userData.keep = true;
       });
