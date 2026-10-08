@@ -956,51 +956,108 @@ var View3D = (function () {
 
   // ---------- 地下街（お試し）----------
   // PLATEAU の地下街モデル（ubld、3D Tiles）を読み込み、地下の空間を半透明で重ねる。一覧は data/ubld.json（scripts/plateau-ubld.mjs）。
-  // 通路網の深さは実際の深さではなく階の順番を並べたものなので、地下街の床（建物ごとの一番低い点の中央値）が
-  // 地下 1 階（-1 × LV）に来るように、地表からの深さを縦に伸ばして合わせる
+  // 通路網の深さは実際の深さではなく階の順番を一定の間隔で並べたものなので、地下街の深さを区間ごとに合わせる:
+  // 上を向いた床の面積を深さ 0.5 m ごとに数え、いちばん多い深さ（地下街の階）を地下 1 層目に、それより深い床のまとまりを
+  // 順に地下 2 層目・3 層目…に合わせ、あいだは直線でつなぐ。床が数えられないとき（LOD1 の箱）は、建物ごとの一番低い点の
+  // 中央値を地下 1 層目に合わせる
+  var ubldCache = {};
+  function ubldLevels(meshes, ground) {
+    var bins = {}, v0 = new THREE.Vector3(), v1 = new THREE.Vector3(), v2 = new THREE.Vector3(), n = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+    meshes.forEach(function (o) {
+      var p = o.geometry.attributes.position, idx = o.geometry.index, tri = idx ? idx.count / 3 : p.count / 3;
+      for (var t = 0; t < tri; t++) {
+        var a = idx ? idx.getX(t * 3) : t * 3, b = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, c = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+        v0.fromBufferAttribute(p, a); v1.fromBufferAttribute(p, b); v2.fromBufferAttribute(p, c);
+        n.crossVectors(e1.subVectors(v1, v0), e2.subVectors(v2, v0));
+        var len = n.length();
+        if (len < 1e-6 || n.y / len < 0.95) continue; // 上を向いた水平な面（床）だけ
+        var d = (v0.y + v1.y + v2.y) / 3 - ground;
+        if (d > -2.5 || d < -60) continue;
+        var k = Math.round(d * 2) / 2;
+        bins[k] = (bins[k] || 0) + len / 2;
+      }
+    });
+    // 床のまとまり: いちばん多い深さから順に取り、前後 2.5 m は同じまとまりとして除く
+    var keys = Object.keys(bins).map(Number), peaks = [], top = 0;
+    function windowArea(k) { var s = 0; keys.forEach(function (x) { if (Math.abs(x - k) <= 1) s += bins[x]; }); return s; }
+    while (keys.length && peaks.length < 6) {
+      var best = null, bestA = 0;
+      keys.forEach(function (k) { var a = windowArea(k); if (a > bestA) { bestA = a; best = k; } });
+      if (best === null || (top && bestA < top * 0.15)) break;
+      if (!top) top = bestA;
+      var sw = 0, sd = 0;
+      keys.forEach(function (x) { if (Math.abs(x - best) <= 1.5) { sw += bins[x]; sd += bins[x] * x; } });
+      peaks.push({ d: sd / sw, a: bestA });
+      keys = keys.filter(function (x) { return Math.abs(x - best) > 2.5; });
+    }
+    if (!peaks.length) return null;
+    var b1 = peaks[0].d; // いちばん多い床 = 地下 1 層目
+    var deeper = peaks.slice(1).filter(function (p) { return p.d < b1 - 2; }).map(function (p) { return p.d; }).sort(function (a, b) { return b - a; });
+    var pts = [[0, 0], [b1, -1]];
+    deeper.forEach(function (d, i) { pts.push([d, -2 - i]); });
+    return pts; // [実際の深さ（m）, 階]
+  }
+  function depthToY(d, pts) {
+    // 区間ごとの直線。地表より上と、いちばん深いまとまりより下は、隣の区間の傾きのまま伸ばす
+    if (d >= 0) return d * (pts[1][1] / pts[1][0]) * LV;
+    for (var i = 1; i < pts.length; i++) {
+      if (d >= pts[i][0] || i === pts.length - 1) {
+        var a = pts[i - 1], b = pts[i];
+        return (a[1] + (d - a[0]) / (b[0] - a[0]) * (b[1] - a[1])) * LV;
+      }
+    }
+    return 0;
+  }
   function addUnderground(st, setStatus) {
     var u = window.UBLD && UBLD.stations && UBLD.stations[st.id];
     if (!u) return;
     var myScene = scene, done = 0, list = u.tiles;
     setStatus('地下街を読み込み中（0/' + list.length + '）');
-    ensureGltf().then(function () {
+    // 読み込みと焼き込みは駅ごとに 1 回だけ（起動中に作り直しが重なっても、同じ読み込みを待つ。2 回焼き込むと形が壊れる）
+    var ready = ubldCache[st.id] = ubldCache[st.id] || ensureGltf().then(function () {
       return Promise.all(list.map(function (t) {
         return loadTile(UBLD.bases[t[0]] + t[1]).then(function (r) { done++; setStatus('地下街を読み込み中（' + done + '/' + list.length + '）'); return r; }, function () { done++; return null; });
       }));
     }).then(function (tiles) {
-      if (scene !== myScene) return;
-      var grp = new THREE.Group(), mins = [];
+      // 初めの 1 回だけ、形を駅の局所座標（m、y は楕円体高）に焼き込み、元の高さを取っておく
+      var meshes = [];
       tiles.forEach(function (r) {
         if (!r) return;
         var holder = new THREE.Group();
         holder.matrixAutoUpdate = false; holder.matrix.copy(tileMatrix(st, r.center));
-        if (r.scene.parent) r.scene.parent.remove(r.scene);
-        holder.add(r.scene); grp.add(holder);
+        holder.add(r.scene); holder.updateMatrixWorld(true);
+        r.scene.traverse(function (o) { if (o.isMesh) meshes.push(o); });
       });
-      grp.updateMatrixWorld(true);
-      grp.traverse(function (o) {
-        if (!o.isMesh) return;
-        var p = o.geometry.attributes.position, id = o.geometry.attributes._batchid || o.geometry.attributes._feature_id_0, lo = {}, v = new THREE.Vector3();
-        for (var k = 0; k < p.count; k++) {
-          v.fromBufferAttribute(p, k).applyMatrix4(o.matrixWorld);
-          var b = id ? id.getX(k) : 0;
-          if (!(b in lo) || v.y < lo[b]) lo[b] = v.y;
-        }
-        Object.keys(lo).forEach(function (b) { mins.push(lo[b]); });
-        if (!o.userData.ubldMat) {
-          o.material = new THREE.MeshLambertMaterial({ color: 0xb9c6dc, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
-          o.userData.ubldMat = true;
-        }
-        o.renderOrder = 1; o.userData.city = 'ubld'; o.userData.keep = true; netMeshes.push(o);
+      var mins = [];
+      meshes.forEach(function (o) {
+        o.geometry.applyMatrix4(o.matrixWorld);
+        var p = o.geometry.attributes.position, id = o.geometry.attributes._batchid || o.geometry.attributes._feature_id_0, lo = {};
+        for (var k = 0; k < p.count; k++) { var b = id ? id.getX(k) : 0; if (!(b in lo) || p.getY(k) < lo[b]) lo[b] = p.getY(k); }
+        Object.keys(lo).forEach(function (b) { mins.push(lo[b] - u.ground); });
+        o.userData.origY = Float32Array.from({ length: p.count }, function (_, k) { return p.getY(k); });
+        o.material = new THREE.MeshLambertMaterial({ color: 0xb9c6dc, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+        o.renderOrder = 1; o.userData.city = 'ubld'; o.userData.keep = true;
       });
       mins.sort(function (a, b) { return a - b; });
-      var floor = mins.length ? mins[Math.floor(mins.length / 2)] : u.ground - 6, depthM = Math.max(2, u.ground - floor);
-      var k = LV / depthM; // 地表 0 m → 0、地下街の床 → -LV（地下 1 階）
-      grp.scale.y = k; grp.position.y = -u.ground * k;
+      var pts = ubldLevels(meshes, u.ground) || [[0, 0], [Math.min(-2, mins.length ? mins[Math.floor(mins.length / 2)] : -6), -1]];
+      return { meshes: meshes, pts: pts };
+    });
+    ready.then(function (c) {
+      if (scene !== myScene) return;
+      var grp = new THREE.Group();
+      c.meshes.forEach(function (o) {
+        // いまの階の間隔（LV、深さのつまみで変わる）で高さを置き直す
+        var p = o.geometry.attributes.position, oy = o.userData.origY;
+        for (var k = 0; k < p.count; k++) p.setY(k, depthToY(oy[k] - u.ground, c.pts));
+        p.needsUpdate = true; o.geometry.computeVertexNormals(); o.geometry.computeBoundingSphere();
+        if (o.parent) o.parent.remove(o);
+        o.position.set(0, 0, 0); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1); o.updateMatrix();
+        grp.add(o); netMeshes.push(o);
+      });
       scene.add(grp);
       setStatus('');
       applyOpacity();
-    }).catch(function () { setStatus('地下街を読み込めませんでした'); });
+    }).catch(function () { delete ubldCache[st.id]; setStatus('地下街を読み込めませんでした'); });
   }
 
   function css(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim() || '#888888'; }
@@ -1822,7 +1879,7 @@ var View3D = (function () {
               '<button type="button" data-view="oblique">斜めから</button><button type="button" data-view="side">横から</button><button type="button" data-view="top">真上から</button><button type="button" data-view="play">歩く様子</button>' +
               (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
               (View3D.hasPhoto ? '<button type="button" id="photo-toggle" aria-pressed="' + View3D.photoCity + '" title="PLATEAU の写真付きの建物と、航空写真の地面に切り替える（データが多いので通信に注意）"' + (View3D.city ? '' : ' hidden') + '>写真の街並み（お試し）</button>' : '') +
-              (View3D.hasUbld(st) ? '<button type="button" id="ubld-toggle" aria-pressed="' + View3D.ubld + '" title="PLATEAU の地下街モデル（壁・床・天井）を重ねる。深さは地下 1 階に合わせて伸ばしている">地下街（お試し）</button>' : '') +
+              (View3D.hasUbld(st) ? '<button type="button" id="ubld-toggle" aria-pressed="' + View3D.ubld + '" title="PLATEAU の地下街モデル（壁・床・天井）を重ねる。深さは通路網の階に合わせて伸ばしている">地下街（お試し）</button>' : '') +
             '</div><div class="knobs"><label class="depth" for="depth">深さ<input type="range" id="depth" min="0.3" max="3" step="0.1" value="' + View3D.depth + '"><output id="depth-v">×' + View3D.depth.toFixed(1) + '</output></label>' +
             (View3D.hasCity ? '<label class="depth" for="city-a" id="city-a-wrap"' + (View3D.city ? '' : ' hidden') + '>街並みの濃さ<input type="range" id="city-a" min="0" max="1" step="0.05" value="' + View3D.cityAlpha + '"><output id="city-a-v">' + Math.round(View3D.cityAlpha * 100) + '%</output></label>' : '') +
             '</div></div></section>' +
@@ -2219,7 +2276,7 @@ var View3D = (function () {
 
   if (window.CITY && CITY.year) $('city-credit').textContent = '建物・建物の名前・道路：「3D都市モデル（Project PLATEAU）東京都23区（' + CITY.year + '年度）」（国土交通省）を加工して作成。建物の高さは実測の値で、地下の深さ（強調あり）とは縮尺が違います。' +
     (window.TILES ? '写真の街並み（お試し）の地面：地理院タイル（シームレス空中写真）（国土地理院）。' : '') +
-    (window.UBLD ? '地下街（お試し）：同じ PLATEAU の地下街モデル（深さは地下 1 階に合わせて伸ばしています）。' : '');
+    (window.UBLD ? '地下街（お試し）：同じ PLATEAU の地下街モデル（深さは通路網の階に合わせて伸ばしています）。' : '');
   // 初期状態: 大門駅 A3出入口 → 4番線（赤羽橋方面）
   // 共有リンク（URL の指定）があればそれ、無ければ前回の選択、それも無ければ大門駅 A3出入口 → 4番線
   var saved = urlChoice() || loadChoice(), start = -1;
