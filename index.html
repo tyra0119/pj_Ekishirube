@@ -1741,12 +1741,12 @@ var View3D = (function () {
     Object.keys(fills).forEach(function (key) {
       var lv = Number(key.split('|')[0]), s = STYLE[key.split('|')[1]];
       var m = ribbonMesh(fills[key], s[0], s[1]);
-      m.renderOrder = -1; m.userData.base = s[1]; m.userData.lv = [lv, lv]; netMeshes.push(m); scene.add(m);
+      m.renderOrder = -1; m.userData.base = s[1]; m.userData.lv = [lv, lv]; m.userData.space = true; netMeshes.push(m); scene.add(m);
     });
     Object.keys(lines).forEach(function (lv) {
       var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(lines[lv], 3));
       var m = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: cMuted, transparent: true, opacity: 0.5, depthWrite: false }));
-      m.userData.base = 0.5; m.userData.lv = [Number(lv), Number(lv)]; netMeshes.push(m); scene.add(m);
+      m.userData.base = 0.5; m.userData.lv = [Number(lv), Number(lv)]; m.userData.space = true; netMeshes.push(m); scene.add(m);
     });
   }
   function setSpaces(on) {
@@ -2325,6 +2325,9 @@ var View3D = (function () {
         else if (u.city === 'ubld') b = fpv ? 1 : 0.12; // 地下街は案内中も、地下の空間の手がかりとして薄く残す（中から見るときは透明にしない）
         else b = (u.city === 'road' && sel.hi > -0.01) ? b * 0.35 : 0; // 写真の街並み（建物・航空写真）は案内中はすべて消す
       }
+      // リアル視点では、構内図の床は地下街のような薄い半透明に（案内中の階を濃くする処理もかけない）。斜めから見ると重なって、
+      // 地下街の床を覆う濃い青に見えていた（2026-10-09 利用者「リアル視点で案内中は、構内図の床は半透明にできる？地下街のように表示してほしい」）
+      if (u.space && fpv) b = u.base * 0.4;
       m.material.opacity = b;
       m.visible = b > 0.003;
     });
