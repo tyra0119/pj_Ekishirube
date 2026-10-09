@@ -2077,20 +2077,56 @@ var View3D = (function () {
     tubeTexs[color] = t;
     return t;
   }
+  // 円柱の矢印。太さは画面上でいつも同じ（半径 TUBE_PX px）。描くたびにカメラからの距離で太さを変える: 円柱は頂点ごとに、
+  // その輪の中心からのずれを奥行きに合わせて伸び縮みさせ（シェーダー）、先の三角と始まりの玉は大きさを変える。
+  // 前は区間ごとに「寄ったときの距離」を見込んだ太さで作っていたので、近づくと太く、長い区間ほど太かった
+  // （2026-10-09 利用者「矢印の円柱が太くなる原因は距離？」→「矢印の太さを直して」）
+  var TUBE_PX = 5;
+  function pxWorld(camera) { return 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov / 2)) / ((el && el.clientHeight) || 440) * TUBE_PX; }
   function tubeArrow(sp, color, radius) {
     var g = new THREE.Group(), curve = polyCurve(sp), len = curve.getLength();
     var tex = tubeTexture(color).clone(); tex.needsUpdate = true;
     tex.repeat.set(Math.max(1, len / (radius * 7)), 2);
     var mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: true });
-    var tube = new THREE.Mesh(new THREE.TubeGeometry(curve, Math.min(800, sp.length * 16), radius, 12, false), mat);
-    tube.onBeforeRender = function (r) { r.clearDepth(); }; // 建物や通路網には隠されない（自分どうしは奥行きを比べる）
+    var segs = Math.min(800, sp.length * 16), rad = 12;
+    var geo = new THREE.TubeGeometry(curve, segs, radius, rad, false);
+    // 頂点ごとに、その輪の中心（線の上の点）
+    var cen = new Float32Array((segs + 1) * (rad + 1) * 3), P = new THREE.Vector3();
+    for (var i = 0; i <= segs; i++) {
+      curve.getPointAt(i / segs, P);
+      for (var j = 0; j <= rad; j++) { var o = (i * (rad + 1) + j) * 3; cen[o] = P.x; cen[o + 1] = P.y; cen[o + 2] = P.z; }
+    }
+    geo.setAttribute('aCenter', new THREE.BufferAttribute(cen, 3));
+    var uni = { uPix: { value: 0.01 }, uR0: { value: radius } };
+    mat.onBeforeCompile = function (sh) {
+      sh.uniforms.uPix = uni.uPix; sh.uniforms.uR0 = uni.uR0;
+      sh.vertexShader = ['attribute vec3 aCenter;', 'uniform float uPix;', 'uniform float uR0;', ''].join('\n') + sh.vertexShader.replace('#include <begin_vertex>',
+        ['vec4 cvw = modelViewMatrix * vec4( aCenter, 1.0 );', 'vec3 transformed = aCenter + ( position - aCenter ) * ( max( -cvw.z, 0.01 ) * uPix / uR0 );'].join('\n'));
+    };
+    mat.customProgramCacheKey = function () { return 'tubeArrowPx'; };
+    var tube = new THREE.Mesh(geo, mat);
+    tube.frustumCulled = false; // 太さを描くときに変えるので、作ったときの大きさでは見切れの判定ができない
+    var mid = curve.getPointAt(0.5);
+    tube.onBeforeRender = function (r, sc, cam) {
+      r.clearDepth(); // 建物や通路網には隠されない（自分どうしは奥行きを比べる）
+      var pw = pxWorld(cam); uni.uPix.value = pw;
+      // 模様（›）の間隔も太さに合わせる（区間の真ん中の距離で）
+      var rr = Math.max(0.05, cam.position.distanceTo(mid) * pw);
+      tex.repeat.x = Math.max(1, len / (rr * 7));
+    };
     tube.renderOrder = 11;
     var end = sp[sp.length - 1], dir = curve.getTangentAt(1).normalize();
-    var cone = new THREE.Mesh(new THREE.ConeGeometry(radius * 2.4, radius * 5.5, 20), new THREE.MeshBasicMaterial({ color: color, transparent: true }));
+    // 先の三角と始まりの玉は、その点を中心に大きさを変える（三角は底が線の終わりに来るよう、形をずらしておく）
+    var coneGeo = new THREE.ConeGeometry(radius * 2.4, radius * 5.5, 20); coneGeo.translate(0, radius * 2.2, 0);
+    var cone = new THREE.Mesh(coneGeo, new THREE.MeshBasicMaterial({ color: color, transparent: true }));
     cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-    cone.position.copy(end).add(dir.clone().multiplyScalar(radius * 2.2)); cone.renderOrder = 11;
+    cone.position.copy(end); cone.renderOrder = 11;
     var ball = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.8, 16, 12), new THREE.MeshBasicMaterial({ color: color, transparent: true }));
     ball.position.copy(sp[0]); ball.renderOrder = 11;
+    [cone, ball].forEach(function (m) {
+      m.frustumCulled = false;
+      m.onBeforeRender = function (r, sc, cam) { var wp = m.getWorldPosition(new THREE.Vector3()); m.scale.setScalar(Math.max(0.01, cam.position.distanceTo(wp) * pxWorld(cam) / radius)); };
+    });
     g.add(tube, cone, ball);
     g.userData.tex = tex;
     return g;
