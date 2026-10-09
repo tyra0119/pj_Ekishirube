@@ -79,6 +79,9 @@ body { background: var(--bg); color: var(--ink); font-family: var(--f-body); fon
 /* 条件の入力 */
 .controls { display: grid; grid-template-columns: 1.1fr 1.4fr auto 1.4fr; gap: 10px 12px; align-items: end; margin-top: 18px; }
 .field { display: grid; gap: 4px; min-width: 0; }
+/* ホームの車両（おすすめ・前から 1〜8 両目）。ホームを選んだときだけ出す */
+.field select.carsel { font-size: 13px; padding: 4px 8px; }
+.field select.carsel[hidden] { display: none; }
 .field label, .lbl { font-size: 12px; color: var(--muted); letter-spacing: .06em; }
 select { font: inherit; font-size: 15px; color: var(--ink); background: var(--surface); border: 1px solid var(--line);
   border-radius: 8px; padding: 9px 10px; width: 100%; min-width: 0; }
@@ -376,11 +379,11 @@ footer a { color: inherit; }
 <main class="wrap">
   <form class="controls" id="form" autocomplete="off">
     <div class="field f-station"><label for="station">駅</label><select id="station"></select></div>
-    <div class="field"><label for="from">出発</label><select id="from"></select></div>
+    <div class="field"><label for="from">出発</label><select id="from"></select><select id="from-car" class="carsel" hidden aria-label="出発のホームの車両"></select></div>
     <button class="swap" type="button" id="swap" title="出発と目的地を入れ替える" aria-label="出発と目的地を入れ替える">
       <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7h12M12 3l4 4-4 4M16 13H4M8 9l-4 4 4 4"/></svg>
     </button>
-    <div class="field"><label for="to">目的地</label><select id="to"></select></div>
+    <div class="field"><label for="to">目的地</label><select id="to"></select><select id="to-car" class="carsel" hidden aria-label="目的地のホームの車両"></select></div>
     <div class="profiles" role="radiogroup" aria-label="移動の条件">
       <span class="lbl">移動の条件</span>
       <label class="seg"><input type="radio" name="profile" id="p-std" value="std" checked><span>標準（いちばん早い）</span></label>
@@ -520,6 +523,7 @@ var Guide = (function () {
   }
 
   function endpointNodes(st, ep) {
+    if (ep.type === 'node') return [ep.idx];
     if (ep.type === 'exit') return stationMeta(st).exits[ep.id] || [];
     var out = [];
     st.nodes.forEach(function (n, i) { if (n[5] === ep.id) out.push(i); });
@@ -696,8 +700,40 @@ var Guide = (function () {
 
   var MODE_WORD = { 2: '階段', 4: 'エスカレーター', 5: 'エレベーター' };
 
+  // 車両を指定したホーム（ep.car = 前から 1〜8 両目）: その車両の真ん中に一時的な点を足した駅のデータを作る（元のデータは変えない）。
+  // ホームは見通せる平らな床なので、同じ階でホームの中心線から 12 m 以内・ホームの長さの範囲（前後 5 m まで）の点すべてと、まっすぐな
+  // 通路でつなぐ（前後いちばん近い点だけにすると、点がまばらなホーム＝六本木で 65 m 先の点へ回り込み、ホームを 180 m 歩いていた）
+  // （2026-10-09 利用者「車両指定の案内は可能？」→「1，2，車両はデフォルトではおすすめとし指定も可能とする」）
+  function withCar(st, ep) {
+    var p = st.plats.filter(function (x) { return x.id === ep.id; })[0];
+    if (!p || !(ep.car >= 1 && ep.car <= CARS)) return null;
+    var t = p.max - (ep.car - 0.5) / CARS * (p.max - p.min), x = p.cx + p.ax * t, y = p.cy + p.ay * t;
+    var near = [];
+    st.nodes.forEach(function (n, i) {
+      if (Math.abs(n[2] - p.level) > 0.01) return;
+      var tn = (n[0] - p.cx) * p.ax + (n[1] - p.cy) * p.ay, lat = Math.abs((n[0] - p.cx) * -p.ay + (n[1] - p.cy) * p.ax);
+      if (lat > 12 || tn < p.min - 5 || tn > p.max + 5) return;
+      near.push([i, Math.hypot(n[0] - x, n[1] - y)]);
+    });
+    if (!near.length) return null;
+    var vi = st.nodes.length, st2 = {};
+    for (var k in st) st2[k] = st[k];
+    st2.nodes = st.nodes.concat([[x, y, p.level, 4, '', p.id]]);
+    st2.links = st.links.slice();
+    near.forEach(function (c) { st2.links.push([vi, c[0], WALK, 1, Math.round(c[1] * 10) / 10]); });
+    if (st.depth) {
+      var nn = near.slice().sort(function (a, b) { return a[1] - b[1]; })[0][0];
+      st2.depth = st.depth.concat([st.depth[nn]]);
+    }
+    return { st: st2, node: vi };
+  }
+
   function guide(st, from, to, profile) {
-    var r = route(st, from, to, profile);
+    // 車両の指定があれば、その車両の位置から（まで）探す
+    var rFrom = from, rTo = to, cf = null, ct = null;
+    if (from.type === 'plat' && from.car && (cf = withCar(st, from))) { st = cf.st; rFrom = { type: 'node', idx: cf.node }; }
+    if (to.type === 'plat' && to.car && (ct = withCar(st, to))) { st = ct.st; rTo = { type: 'node', idx: ct.node }; }
+    var r = route(st, rFrom, rTo, profile);
     if (!r) return null;
     var segs = segment(st, r);
     var steps = [], totalSec = 0, counts = { 2: 0, 4: 0, 5: 0 }, boardCar = null, boardPlat = null;
@@ -708,7 +744,8 @@ var Guide = (function () {
       boardPlat = fromPlat;
       boardCar = carOf(fromPlat, st.nodes[r.start]);
       steps.push({ kind: 'start', icon: 'train', title: platLabel(st, fromPlat) + 'で降りる',
-        detail: '進行方向の前から' + boardCar + '両目付近で降りると、この先の移動がいちばん短くなります。',
+        detail: cf ? '進行方向の前から' + boardCar + '両目（指定した車両）から案内します。'
+          : '進行方向の前から' + boardCar + '両目付近で降りると、この先の移動がいちばん短くなります。',
         z: st.nodes[r.start][2], car: boardCar, plat: fromPlat });
     } else {
       steps.push({ kind: 'start', icon: 'exit', title: from.id + '出入口から入る', detail: '地上の「' + from.id + '」の出入口が出発地点です。', z: st.nodes[r.start][2] });
@@ -774,7 +811,7 @@ var Guide = (function () {
       boardPlat = toPlat;
       boardCar = carOf(toPlat, st.nodes[r.end]);
       steps.push({ kind: 'end', icon: 'train', title: platLabel(st, toPlat) + 'に到着',
-        detail: 'ホームに到着した場所は、進行方向の前から' + boardCar + '両目付近です。' + (toPlat.hs.length ? '（' + toPlat.hs.join('・') + '行き）' : ''),
+        detail: (ct ? '進行方向の前から' + boardCar + '両目（指定した車両）の乗車位置です。' : 'ホームに到着した場所は、進行方向の前から' + boardCar + '両目付近です。') + (toPlat.hs.length ? '（' + toPlat.hs.join('・') + '行き）' : ''),
         z: st.nodes[r.end][2], car: boardCar, plat: toPlat });
     } else {
       steps.push({ kind: 'end', icon: 'exit', title: to.id + '出入口から地上へ', detail: '', z: st.nodes[r.end][2] });
@@ -788,7 +825,8 @@ var Guide = (function () {
       if (bt > 0) braille = Math.round(bl / bt * 100);
     }
     return { steps: steps, segs: segs, route: r, minutes: Math.max(1, Math.round(totalSec / 60)),
-      counts: counts, boardCar: boardCar, boardPlat: boardPlat, used: used, toilet: toilet, braille: braille };
+      counts: counts, boardCar: boardCar, boardPlat: boardPlat, used: used, toilet: toilet, braille: braille,
+      st: st, carSet: !!(cf || ct) }; // st: 車両を指定したときは一時的な点を足した駅のデータ（立体図はこちらで描く）
   }
 
   // 通路の区間のそばにあるトイレ（構内地図のある駅だけ）。同じ階で、通路の線から 10 m 以内
@@ -2828,23 +2866,51 @@ var View3D = (function () {
   }
   function hasOpt(id, v) { return Array.prototype.some.call($(id).options, function (o) { return o.value === v; }); }
   function parseEp(v) { var i = v.indexOf(':'); return { type: v.slice(0, i), id: v.slice(i + 1) }; }
+  // 出発・目的地。ホームで車両を指定していれば car（前から 1〜8 両目）を付ける。おすすめ（指定なし）は付けない
+  // （2026-10-09 利用者「車両指定の案内は可能？」→「1，2，車両はデフォルトではおすすめとし指定も可能とする」）
+  function epOf(k) {
+    var ep = parseEp($(k).value);
+    if (ep.type === 'plat' && +$(k + '-car').value) ep.car = +$(k + '-car').value;
+    return ep;
+  }
+  // 車両の選択: ホームのときだけ出し、「おすすめ」には推定した車両を添える
+  function syncCarSel(k, rec) {
+    var sel = $(k + '-car'), plat = parseEp($(k).value).type === 'plat';
+    sel.hidden = !plat;
+    if (!sel.options.length) {
+      var o = document.createElement('option'); o.value = ''; sel.appendChild(o);
+      for (var c = 1; c <= Guide.CARS; c++) { o = document.createElement('option'); o.value = c; o.textContent = '前から' + c + '両目'; sel.appendChild(o); }
+    }
+    sel.options[0].textContent = 'おすすめの車両' + (rec ? '（前から' + rec + '両目）' : '');
+  }
   function profile() { return document.querySelector('input[name=profile]:checked').value; }
 
-  function setStation(i, from, to) {
+  function setStation(i, from, to, fc, tc) {
     state.st = STATIONS[i];
     $('station').value = i;
     $('stname').textContent = state.st.name;
     var num = state.st.code.split('-');
     $('numbering').innerHTML = '<div><b>' + num[0] + '</b><span>' + num[1] + '</span></div>';
     fillEndpoints(from, to);
+    syncCarSel('from'); syncCarSel('to');
+    $('from-car').value = fc >= 1 && fc <= Guide.CARS ? String(fc) : '';
+    $('to-car').value = tc >= 1 && tc <= Guide.CARS ? String(tc) : '';
     run();
   }
 
   $('station').addEventListener('change', function () { setStation(+this.value); });
-  $('from').addEventListener('change', run);
-  $('to').addEventListener('change', run);
+  // ホームを選び直したら、車両はおすすめに戻す
+  $('from').addEventListener('change', function () { $('from-car').value = ''; run(); });
+  $('to').addEventListener('change', function () { $('to-car').value = ''; run(); });
+  $('from-car').addEventListener('change', run);
+  $('to-car').addEventListener('change', run);
   document.querySelectorAll('input[name=profile]').forEach(function (r) { r.addEventListener('change', run); });
-  $('swap').addEventListener('click', function () { var a = $('from').value; $('from').value = $('to').value; $('to').value = a; run(); });
+  $('swap').addEventListener('click', function () {
+    var a = $('from').value; $('from').value = $('to').value; $('to').value = a;
+    syncCarSel('from'); syncCarSel('to');
+    var c = $('from-car').value; $('from-car').value = $('to-car').value; $('to-car').value = c;
+    run();
+  });
   $('form').addEventListener('submit', function (e) { e.preventDefault(); });
 
   // ---------- 表示 ----------
@@ -2856,7 +2922,7 @@ var View3D = (function () {
 
   var SAVE_KEY = 'ekishirube.choice';
   function saveChoice() {
-    try { localStorage.setItem(SAVE_KEY, JSON.stringify({ st: state.st.id, from: $('from').value, to: $('to').value, pr: profile() })); } catch (e) {}
+    try { localStorage.setItem(SAVE_KEY, JSON.stringify({ st: state.st.id, from: $('from').value, to: $('to').value, pr: profile(), fc: epOf('from').car, tc: epOf('to').car })); } catch (e) {}
     // アドレス欄も選んだ内容に合わせる（そのままコピーしても同じ案内が開く）。埋め込み（アーティファクト）では変えない
     try { if (/^https?:/.test(location.protocol) && window.top === window) history.replaceState(null, '', location.pathname + choiceQuery()); } catch (e) {}
   }
@@ -2864,18 +2930,20 @@ var View3D = (function () {
   // ?st=駅ID&from=exit:A3&to=plat:421P4&pr=std。開くと、前回の選択より優先してその案内を出す
   var PUBLIC_URL = 'https://tyra0119.github.io/pj_Ekishirube/';
   function choiceQuery() {
-    return '?st=' + encodeURIComponent(state.st.id) + '&from=' + encodeURIComponent($('from').value) + '&to=' + encodeURIComponent($('to').value) + '&pr=' + profile();
+    var fc = epOf('from').car, tc = epOf('to').car;
+    return '?st=' + encodeURIComponent(state.st.id) + '&from=' + encodeURIComponent($('from').value) + '&to=' + encodeURIComponent($('to').value) + '&pr=' + profile() +
+      (fc ? '&fc=' + fc : '') + (tc ? '&tc=' + tc : '');
   }
   function urlChoice() {
     try {
       var p = new URLSearchParams(location.search);
-      return p.get('st') ? { st: p.get('st'), from: p.get('from'), to: p.get('to'), pr: p.get('pr') } : null;
+      return p.get('st') ? { st: p.get('st'), from: p.get('from'), to: p.get('to'), pr: p.get('pr'), fc: +p.get('fc') || null, tc: +p.get('tc') || null } : null;
     } catch (e) { return null; }
   }
   function epText(ep) {
     if (ep.type === 'exit') return ep.id + '出入口';
     var p = state.st.plats.filter(function (x) { return x.id === ep.id; })[0];
-    return p ? Guide.platLabel(state.st, p) : '';
+    return p ? Guide.platLabel(state.st, p) + (ep.car ? '・前から' + ep.car + '両目' : '') : '';
   }
   var toastTimer = null;
   function toast(msg) {
@@ -2886,7 +2954,7 @@ var View3D = (function () {
   }
   function shareRoute() {
     var url = PUBLIC_URL + choiceQuery();
-    var text = 'エキしるべ: ' + state.st.name + '駅 ' + epText(parseEp($('from').value)) + ' → ' + epText(parseEp($('to').value));
+    var text = 'エキしるべ: ' + state.st.name + '駅 ' + epText(epOf('from')) + ' → ' + epText(epOf('to'));
     // スマートフォンは端末の共有（LINE・メールなど）、パソコンはリンクをコピー
     var touch = window.matchMedia && matchMedia('(pointer: coarse)').matches;
     if (touch && navigator.share) { navigator.share({ title: 'エキしるべ', text: text, url: url }).catch(function () {}); return; }
@@ -2908,8 +2976,9 @@ var View3D = (function () {
 
   function run() {
     saveChoice();
-    var st = state.st, from = parseEp($('from').value), to = parseEp($('to').value), pr = profile();
+    var st = state.st, from = epOf('from'), to = epOf('to'), pr = profile();
     var out = $('out');
+    syncCarSel('from'); syncCarSel('to');
     if (from.type === to.type && from.id === to.id) {
       out.innerHTML = '<div class="notice">出発と目的地が同じです。どちらかを変えてください。</div>'; return;
     }
@@ -2917,6 +2986,12 @@ var View3D = (function () {
       out.innerHTML = '<div class="notice">出入口どうしの案内には対応していません。片方をホームにしてください。</div>'; return;
     }
     var g = Guide.guide(st, from, to, pr);
+    // 「おすすめの車両」に、車両を指定しないときの推定の車両を添える
+    var g0 = from.car || to.car ? Guide.guide(st, { type: from.type, id: from.id }, { type: to.type, id: to.id }, pr) : g;
+    if (g0) {
+      if (from.type === 'plat') syncCarSel('from', g0.steps[0].car);
+      if (to.type === 'plat') syncCarSel('to', g0.steps[g0.steps.length - 1].car);
+    }
     if (!g) { out.innerHTML = noRoute(st, from, to, pr); bindAlts(); return; }
     state.g = g; state.nav = -1; document.body.classList.remove('nav-on');
     out.innerHTML =
@@ -2940,9 +3015,9 @@ var View3D = (function () {
       '</div>' +
       '</div>';
     // 駅・出発・目的地が同じ（条件だけ変えた）なら、立体図のカメラは動かさない
-    var vkey = st.id + '|' + from.type + ':' + from.id + '|' + to.type + ':' + to.id, sameView = state.vkey === vkey;
+    var vkey = st.id + '|' + from.type + ':' + from.id + ':' + (from.car || '') + '|' + to.type + ':' + to.id + ':' + (to.car || ''), sameView = state.vkey === vkey;
     state.vkey = vkey;
-    View3D.build(st, g, from, to, $('stage'), false, sameView);
+    View3D.build(g.st || st, g, from, to, $('stage'), false, sameView); // 車両を指定したときは、その位置の点を足した駅のデータで描く
     // 経路を選び直すと立体図は外からの見え方に戻る（リアル視点も切れる）ので、ボタンの見た目も合わせる
     // （2026-10-08 利用者「リアル視点を押して、出発地を変えると、リアル視点がＯＮのままだね」。ボタンは作り直す前の状態で描いていた）
     if ($('fpv-toggle')) $('fpv-toggle').setAttribute('aria-pressed', View3D.fpv);
@@ -2998,7 +3073,7 @@ var View3D = (function () {
     if (!c[2] && !c[4] && !c[5]) chips.push('<span class="chip">上り下りなし</span>');
     if (g.braille !== null && g.braille !== undefined) chips.push('<span class="chip" title="国土交通省の歩行空間ネットワークデータで、経路の平らな通路の長さのうち視覚障害者誘導用ブロックのある割合">点字ブロック：経路の約' + (Math.round(g.braille / 10) * 10) + '%</span>');
     if (g.toilet) chips.push('<span class="chip">トイレ：経路のそば（' + (g.toilet[4] ? '改札内' : '改札外') + '）</span>');
-    if (g.boardCar) chips.push('<span class="chip hl">' + (from.type === 'plat' ? '降りる位置' : '到着する位置') + '：前から' + g.boardCar + '両目付近</span>');
+    if (g.boardCar) chips.push('<span class="chip hl">' + (from.type === 'plat' ? '降りる位置' : '到着する位置') + (g.carSet ? '（指定）' : '') + '：前から' + g.boardCar + '両目' + (g.carSet ? '' : '付近') + '</span>');
     return '<div class="summary">' +
       '<div class="mins">約' + g.minutes + '<small>分</small></div>' +
       '<div style="display:grid;gap:6px;min-width:0">' +
@@ -3387,7 +3462,7 @@ var View3D = (function () {
     start = STATIONS.findIndex(function (s) { return s.id === saved.st; });
     if (saved.pr && $('p-' + saved.pr)) $('p-' + saved.pr).checked = true;
   }
-  if (start >= 0) setStation(start, saved.from, saved.to);
+  if (start >= 0) setStation(start, saved.from, saved.to, saved.fc, saved.tc);
   else {
     start = STATIONS.findIndex(function (s) { return s.name === '大門'; });
     setStation(start < 0 ? 0 : start, 'exit:A3', 'plat:421P4');
