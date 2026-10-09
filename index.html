@@ -81,6 +81,8 @@ body { background: var(--bg); color: var(--ink); font-family: var(--f-body); fon
 .field { display: grid; gap: 4px; min-width: 0; }
 /* ホームの車両（おすすめ・前から 1〜8 両目）。ホームを選んだときだけ出す */
 .field select.carsel { font-size: 13px; padding: 4px 8px; }
+.women-txt { font-size: 9px; fill: #c2185b; font-weight: 700; }
+.women-txt.hl { fill: #fff; }
 .field select.carsel[hidden] { display: none; }
 .field label, .lbl { font-size: 12px; color: var(--muted); letter-spacing: .06em; }
 select { font: inherit; font-size: 15px; color: var(--ink); background: var(--surface); border: 1px solid var(--line);
@@ -532,8 +534,12 @@ var Guide = (function () {
 
   function route(st, from, to, profile) {
     var N = st.nodes.length, adj = [];
+    // 出入口から出入口へは、改札を通らない道だけ（改札の内側を通り抜けると運賃がかかる）
+    // （2026-10-09 利用者「出入口から出入口への案内」）
+    var noGate = from.type === 'exit' && to.type === 'exit';
     for (var i = 0; i < N; i++) adj.push([]);
     st.links.forEach(function (l, li) {
+      if (noGate && (l[2] === GATE || l[2] === EXITGATE)) return;
       var a = l[0], b = l[1], dz = st.nodes[b][2] - st.nodes[a][2];
       var c = edgeCost(l[2], l[4], dz, profile);
       // 歩行空間ネットワークの勾配（構内地図のある駅）。段差なしの条件では 8% を超える坂を避ける（通れなくはしない）
@@ -700,6 +706,20 @@ var Guide = (function () {
 
   var MODE_WORD = { 2: '階段', 4: 'エスカレーター', 5: 'エレベーター' };
 
+  // 女性専用車: 8 両編成の 4 号車（平日朝。光が丘駅を 7:00〜8:30 に出る列車と、都庁前駅 2 番線を 7:15〜8:10 に出る列車。東京都交通局 2022-11-25 発表）。
+  // 号車は、新宿・六本木方面（駅番号が小さくなる向き。新宿西口 → 都庁前を含む）へ向かうとき先頭が 1 号車、光が丘方面へ向かうとき先頭が 8 号車
+  // （乗り換え案内のサイトの記載）。なので 4 号車は、前者で前から 4 両目、後者で前から 5 両目
+  // （2026-10-09 利用者「車両の指定に女性専用車を表示」）
+  var OEDO = ['新宿西口', '東新宿', '若松河田', '牛込柳町', '牛込神楽坂', '飯田橋', '春日', '本郷三丁目', '上野御徒町', '新御徒町', '蔵前', '両国', '森下',
+    '清澄白河', '門前仲町', '月島', '勝どき', '築地市場', '汐留', '大門', '赤羽橋', '麻布十番', '六本木', '青山一丁目', '国立競技場', '代々木', '新宿', '都庁前',
+    '西新宿五丁目', '中野坂上', '東中野', '中井', '落合南長崎', '新江古田', '練馬', '豊島園', '練馬春日町', '光が丘']; // E-01〜E-38
+  function womenCar(st, p) {
+    var cur = OEDO.indexOf(st.name) + 1, nx = OEDO.indexOf(p.next) + 1;
+    if (!cur || !nx) return null; // 終点に着くだけのホーム（都庁前 3 番線）など
+    var car1Front = (nx < cur && !(cur === 28 && nx === 1)) || (cur === 1 && nx === 28);
+    return { car: car1Front ? 4 : 5, no: 4, when: car1Front ? '平日朝、光が丘駅を 7:00〜8:30 に出る列車' : '平日朝、都庁前駅2番線を 7:15〜8:10 に出る列車' };
+  }
+
   // 車両を指定したホーム（ep.car = 前から 1〜8 両目）: その車両の真ん中に一時的な点を足した駅のデータを作る（元のデータは変えない）。
   // ホームは見通せる平らな床なので、同じ階でホームの中心線から 12 m 以内・ホームの長さの範囲（前後 5 m まで）の点すべてと、まっすぐな
   // 通路でつなぐ（前後いちばん近い点だけにすると、点がまばらなホーム＝六本木で 65 m 先の点へ回り込み、ホームを 180 m 歩いていた）
@@ -747,6 +767,8 @@ var Guide = (function () {
         detail: cf ? '進行方向の前から' + boardCar + '両目（指定した車両）から案内します。'
           : '進行方向の前から' + boardCar + '両目付近で降りると、この先の移動がいちばん短くなります。',
         z: st.nodes[r.start][2], car: boardCar, plat: fromPlat });
+      var wf = womenCar(st, fromPlat);
+      if (wf && wf.car === boardCar) steps[0].note = 'この車両（4号車）は、' + wf.when + 'で女性専用車です。';
     } else {
       steps.push({ kind: 'start', icon: 'exit', title: from.id + '出入口から入る', detail: '地上の「' + from.id + '」の出入口が出発地点です。', z: st.nodes[r.start][2] });
     }
@@ -813,6 +835,8 @@ var Guide = (function () {
       steps.push({ kind: 'end', icon: 'train', title: platLabel(st, toPlat) + 'に到着',
         detail: (ct ? '進行方向の前から' + boardCar + '両目（指定した車両）の乗車位置です。' : 'ホームに到着した場所は、進行方向の前から' + boardCar + '両目付近です。') + (toPlat.hs.length ? '（' + toPlat.hs.join('・') + '行き）' : ''),
         z: st.nodes[r.end][2], car: boardCar, plat: toPlat });
+      var wt = womenCar(st, toPlat);
+      if (wt && wt.car === boardCar) steps[steps.length - 1].note = 'この車両（4号車）は、' + wt.when + 'で女性専用車です。';
     } else {
       steps.push({ kind: 'end', icon: 'exit', title: to.id + '出入口から地上へ', detail: '', z: st.nodes[r.end][2] });
     }
@@ -869,7 +893,7 @@ var Guide = (function () {
   }
 
   return { guide: guide, exitNames: exitNames, platLabel: platLabel, levelName: levelName, levelLabel: levelLabel,
-    platformFacilities: platformFacilities, carOf: carOf, PROFILES: PROFILES, CARS: CARS };
+    platformFacilities: platformFacilities, carOf: carOf, womenCar: womenCar, PROFILES: PROFILES, CARS: CARS };
 })();
 
 // 立体表示: 通路網を帯、経路を管で描く。高さ = 階層 × LV（強調）
@@ -2885,6 +2909,9 @@ var View3D = (function () {
       for (var c = 1; c <= Guide.CARS; c++) { o = document.createElement('option'); o.value = c; o.textContent = '前から' + c + '両目'; sel.appendChild(o); }
     }
     sel.options[0].textContent = 'おすすめの車両' + (rec ? '（前から' + rec + '両目）' : '');
+    // 女性専用車（平日朝の一部の列車の 4 号車）の車両に添える（2026-10-09 利用者「車両の指定に女性専用車を表示」）
+    var ep = parseEp($(k).value), p = state.st.plats.filter(function (x) { return x.id === ep.id; })[0], w = p && Guide.womenCar(state.st, p);
+    for (var c = 1; c <= Guide.CARS; c++) sel.options[c].textContent = '前から' + c + '両目' + (w && w.car === c ? '（女性専用車・平日朝）' : '');
   }
   function profile() { return document.querySelector('input[name=profile]:checked').value; }
 
@@ -2984,9 +3011,6 @@ var View3D = (function () {
     syncCarSel('from'); syncCarSel('to');
     if (from.type === to.type && from.id === to.id) {
       out.innerHTML = '<div class="notice">出発と目的地が同じです。どちらかを変えてください。</div>'; return;
-    }
-    if (from.type === 'exit' && to.type === 'exit') {
-      out.innerHTML = '<div class="notice">出入口どうしの案内には対応していません。片方をホームにしてください。</div>'; return;
     }
     var g = Guide.guide(st, from, to, pr);
     // 「おすすめの車両」に、車両を指定しないときの推定の車両を添える
@@ -3203,6 +3227,12 @@ var View3D = (function () {
       h.push('<text class="car-no' + (hl ? ' hl' : '') + '" x="' + (cx0 + (cw - 4) / 2) + '" y="' + (top + carH / 2 + 5) + '" text-anchor="middle">' + c + '</text>');
     }
     h.push('<text class="sub-txt" x="' + L + '" y="' + (top - 6) + '">数字は前から数えた両数</text>');
+    // 女性専用車（平日朝の一部の列車の 4 号車）: 車両の中の下に小さく（時間帯は手順と車両の選択に書く）
+    var wc = Guide.womenCar(st, p);
+    if (wc) {
+      var wx = W - R - wc.car * cw + 2 + (cw - 4) / 2;
+      h.push('<text class="women-txt' + (wc.car === g.boardCar ? ' hl' : '') + '" x="' + wx + '" y="' + (top + carH - 4) + '" text-anchor="middle">女性専用車</text>');
+    }
     // ホーム
     h.push('<rect class="plat-body" x="' + L + '" y="' + platY + '" width="' + (W - L - R) + '" height="' + platH + '" rx="4"/>');
     // 昇降設備
@@ -3250,7 +3280,7 @@ var View3D = (function () {
     var meta = st._meta, base = st.nodes[meta.exits[chosen.id][0]];
     var alts = [];
     Guide.exitNames(st).forEach(function (n) {
-      if (n === chosen.id) return;
+      if (n === chosen.id || (to.type === 'exit' && n === to.id)) return; // 出入口どうしのとき、目的地と同じ出入口は挙げない
       var e = { type: 'exit', id: n };
       var g = exitSide === 'from' ? Guide.guide(st, e, to, pr) : Guide.guide(st, from, e, pr);
       if (!g) return;
@@ -3258,7 +3288,11 @@ var View3D = (function () {
       alts.push({ n: n, d: d, min: g.minutes });
     });
     alts.sort(function (a, b) { return a.d - b.d; });
-    var msg = pr === 'ev'
+    // 出入口から出入口へは、改札を通らない道だけを探す（2026-10-09 利用者「出入口から出入口への案内」）
+    var both = from.type === 'exit' && to.type === 'exit';
+    var msg = both
+      ? '<b>' + esc(from.id) + '出入口から' + esc(to.id) + '出入口へ、改札を通らずに' + (pr === 'ev' ? '段差なしで' : '') + '行ける道がデータにありません。</b>改札の中を通り抜けると運賃がかかります。地上を歩くか、次の出入口を使ってください。'
+      : pr === 'ev'
       ? '<b>' + esc(chosen.id) + '出入口からは、段差なしで行ける経路がデータにありません。</b>エレベーターのある出入口を使ってください。'
       : '<b>経路が見つかりませんでした。</b>';
     return '<div class="notice">' + msg + (alts.length ? '<div class="alts">' + alts.slice(0, 4).map(function (a) {
