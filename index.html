@@ -2312,6 +2312,9 @@ var View3D = (function () {
       ids.forEach(function (i) { p.add(V(st, i)); }); p.divideScalar(ids.length);
       var chosen = (from.type === 'exit' && from.id === name) || (to.type === 'exit' && to.id === name);
       var lb = label(name, cExit, '#131313', chosen ? 19 : 14, null, chosen ? 50 : 20); labels.push(lb);
+      // 出発・目的地にした出入口の札は、ピンの下にぶら下げる（番線の札と同じ）。上に浮かせるとピンに隠れて番号が見えなかった
+      // （2026-10-09 利用者「出入口の番号札より手前に出発が表示される。番号札が見えない」）
+      if (chosen) { lb.center.set(0.5, 1.25); lb.userData.ay = 1.25; lb.position.copy(p); scene.add(lb); return; }
       // 札は少し浮かせ、元の場所と細い線でつなぐ（通路の線に重ならないように）
       var lift = Math.max(5, LV * 0.35);
       lb.position.set(p.x, p.y + lift, p.z); scene.add(lb);
