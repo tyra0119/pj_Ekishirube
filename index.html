@@ -1597,6 +1597,7 @@ var View3D = (function () {
     controls.enabled = !on;
     camera.fov = on ? 72 : 38; camera.near = on ? 0.1 : 1; camera.updateProjectionMatrix();
     if (fpvSigns) fpvSigns.visible = on;
+    if (fpvStairs) fpvStairs.visible = on;
     if (routeTube) routeTube.visible = !on;
     if (dot) dot.visible = !on && (!sel || !!play);
     if (ripple && on) ripple.visible = false;
@@ -1736,7 +1737,27 @@ var View3D = (function () {
   // 通路網の階段・エスカレーターの線とエレベーターの柱。地下街を表示しているときは、地下街と重なるものを描かない
   // （2026-10-09 利用者「被ってる階段やエスカレータも非表示にできる？」）。線の 1/4・1/2・3/4 の点のうち 2 つ以上が、同じ高さ（前後 2 以内）で
   // 地下街のます目に入っていれば除く。エレベーターは柱の上下の端と中ほど
-  var vertSegs = [], shaftSegs = [], vertObjs = [];
+  var vertSegs = [], shaftSegs = [], vertObjs = [], fpvStairs = null;
+  // リアル視点の階段・エスカレーター: 地下街のモデルに無いもの（ホームへ下りる階段など）を、段（踏み面と蹴上げ）と両側の高さ 0.9 m の
+  // 壁で描く（2026-10-09 利用者「リアル視点の D2〜1番線、標準、11 の階段が、階段に見えない」。通路網の線をリアル視点で消したので、何も描かれていなかった）
+  function stairGeo(sg, tread, riser, wall) {
+    var a = sg[0], b = sg[1], top = a.y >= b.y ? a : b, bot = top === a ? b : a;
+    var dx = bot.x - top.x, dz = bot.z - top.z, h = Math.hypot(dx, dz), dy = top.y - bot.y;
+    if (h < 0.3 || dy < 0.3) return;
+    var sx = -dz / h, sz = dx / h, W = 1.0, n = Math.max(4, Math.round(h / 0.45));
+    function q(arr, p1, p2, p3, p4) { arr.push(p1[0], p1[1], p1[2], p2[0], p2[1], p2[2], p3[0], p3[1], p3[2], p1[0], p1[1], p1[2], p3[0], p3[1], p3[2], p4[0], p4[1], p4[2]); }
+    for (var i = 0; i < n; i++) {
+      var t0 = i / n, t1 = (i + 1) / n, y0 = top.y - dy * i / n, y1 = top.y - dy * (i + 1) / n;
+      var x0 = top.x + dx * t0, z0 = top.z + dz * t0, x1 = top.x + dx * t1, z1 = top.z + dz * t1;
+      q(riser, [x0 + sx * W, y0, z0 + sz * W], [x0 - sx * W, y0, z0 - sz * W], [x0 - sx * W, y1, z0 - sz * W], [x0 + sx * W, y1, z0 + sz * W]);
+      q(tread, [x0 + sx * W, y1, z0 + sz * W], [x0 - sx * W, y1, z0 - sz * W], [x1 - sx * W, y1, z1 - sz * W], [x1 + sx * W, y1, z1 + sz * W]);
+    }
+    if (!sg[3]) return; // 両側の壁は経路が通る階段だけ（ほかの階段の壁が斜めの板として視界を横切っていた）
+    [1, -1].forEach(function (k) { // 両側の壁（段の上 0.9 m まで）
+      var tx = top.x + sx * W * k, tz = top.z + sz * W * k, bx = bot.x + sx * W * k, bz = bot.z + sz * W * k;
+      q(wall, [tx, top.y - 0.2, tz], [bx, bot.y - 0.2, bz], [bx, bot.y + 0.9, bz], [tx, top.y + 0.9, tz]);
+    });
+  }
   function coveredBy(cells, pts) {
     var hit = 0;
     pts.forEach(function (p) { var cl = cells[Math.floor(p.x / 2) + ',' + Math.floor(p.z / 2)]; if (cl && p.y >= cl[0] - 2 && p.y <= cl[1] + 2) hit++; });
@@ -1746,13 +1767,23 @@ var View3D = (function () {
     vertObjs.forEach(function (m) { scene.remove(m); var k = netMeshes.indexOf(m); if (k >= 0) netMeshes.splice(k, 1); });
     vertObjs = [];
     var cMuted = css('--muted'), vert = {};
+    if (fpvStairs) { scene.remove(fpvStairs); fpvStairs = null; }
+    var tread = [], riser = [], wall = [];
     vertSegs.forEach(function (sg) {
       var a = sg[0], b = sg[1];
       if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }))) return;
+      stairGeo(sg, tread, riser, wall);
       var dx = b.x - a.x, dz = b.z - a.z, hl = Math.hypot(dx, dz), px = -dz / hl * 0.9, pz = dx / hl * 0.9;
       (vert[sg[2]] = vert[sg[2]] || []).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
         a.x - px, a.y, a.z - pz, b.x - px, b.y, b.z - pz, b.x + px, b.y, b.z + pz);
     });
+    var fg = new THREE.Group();
+    [[tread, '#d5dae2'], [riser, '#a7afbc'], [wall, '#c3cad5']].forEach(function (d) {
+      if (!d[0].length) return;
+      var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(d[0], 3)); geo.computeVertexNormals();
+      fg.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: d[1], side: THREE.DoubleSide })));
+    });
+    fg.visible = fpv; fpvStairs = fg; scene.add(fg);
     Object.keys(vert).forEach(function (key) {
       var m = ribbonMesh(vert[key], cMuted, 0.55);
       m.userData.base = 0.55; m.userData.lv = key.split(':').map(Number); m.userData.net = true; netMeshes.push(m); scene.add(m); vertObjs.push(m);
@@ -2118,7 +2149,7 @@ var View3D = (function () {
         var rv = routeVert[l[0] + '-' + l[1]];
         if (rv) { a = rv[0]; b = rv[1]; } else easeLink(a, b, l[0], l[1]);
         dx = b.x - a.x; dz = b.z - a.z; hl = Math.hypot(dx, dz); if (hl < 0.3) return;
-        vertSegs.push([a.clone(), b.clone(), key]); // 階段・エスカレーターは drawVert で（地下街と重なるものを後で除けるように）
+        vertSegs.push([a.clone(), b.clone(), key, !!rv]); // 階段・エスカレーターは drawVert で（地下街と重なるものを後で除けるように）。4 番目: 経路が通る
         return;
       }
       var w = 2.6, px = -dz / hl * w / 2, pz = dx / hl * w / 2;
