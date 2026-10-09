@@ -1622,7 +1622,10 @@ var View3D = (function () {
   function buildStairSpan(st) {
     stairSpan = {};
     var list = window.SPACES && SPACES[st.id];
-    if (!list) return;
+    // 地下街を見て点の位置・深さを直した駅（新宿西口）は、GTFS の長さが実物どおりなので伸ばさない（構内図の範囲で伸ばすと、
+    // リアル視点の通り道が実物のエスカレーターより手前から下り始め、その下をくぐっていた。2026-10-09 利用者「D2〜1番線、標準、4 の
+    // エスカレータ下りについて、エスカレータの下側を通過している」）
+    if (!list || st.edited) return;
     function inRing(x, y, r) {
       var c = false;
       for (var i = 0, j = r.length / 2 - 1; i < r.length / 2; j = i++) {
@@ -1656,7 +1659,8 @@ var View3D = (function () {
         }
         var t0 = Infinity, t1 = -Infinity;
         for (i = 0; i < r.length; i += 2) { var t = r[i] * ux + r[i + 1] * uy; t0 = Math.min(t0, t); t1 = Math.max(t1, t); }
-        best = Math.max(best, t1 - t0);
+        // エスカレーターの範囲は乗り口・降り口の床（ランディングプレート）を含むので、両端の分 3 m を引く
+        best = Math.max(best, t1 - t0 - (kind === 'e' ? 3 : 0));
       });
       if (best > 0) stairSpan[Math.min(l[0], l[1]) + '-' + Math.max(l[0], l[1])] = best;
     });
