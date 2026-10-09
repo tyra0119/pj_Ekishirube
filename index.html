@@ -1737,7 +1737,7 @@ var View3D = (function () {
   // 通路網の階段・エスカレーターの線とエレベーターの柱。地下街を表示しているときは、地下街と重なるものを描かない
   // （2026-10-09 利用者「被ってる階段やエスカレータも非表示にできる？」）。線の 1/4・1/2・3/4 の点のうち 2 つ以上が、同じ高さ（前後 2 以内）で
   // 地下街のます目に入っていれば除く。エレベーターは柱の上下の端と中ほど
-  var vertSegs = [], shaftSegs = [], vertObjs = [], fpvStairs = null;
+  var vertSegs = [], shaftSegs = [], vertObjs = [], fpvStairs = null, flatSegs = [];
   // リアル視点の階段・エスカレーター: 地下街のモデルに無いもの（ホームへ下りる階段など）を、段（踏み面と蹴上げ）と両側の高さ 0.9 m の
   // 壁で描く（2026-10-09 利用者「リアル視点の D2〜1番線、標準、11 の階段が、階段に見えない」。通路網の線をリアル視点で消したので、何も描かれていなかった）
   function stairGeo(sg, tread, riser, wall) {
@@ -1777,8 +1777,20 @@ var View3D = (function () {
       (vert[sg[2]] = vert[sg[2]] || []).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
         a.x - px, a.y, a.z - pz, b.x - px, b.y, b.z - pz, b.x + px, b.y, b.z + pz);
     });
+    // 床の板: 構内図にも地下街にも床の無い平らな通路（踊り場など）。幅 2.6 m、両端を 0.8 m 伸ばしてつなぐ
+    // （2026-10-09 利用者「階段途中の床が消えてるね」。リアル視点で通路網の帯を消したので、踊り場の床が無かった）
+    var floor = [];
+    flatSegs.forEach(function (sg) {
+      var a = sg[0], b = sg[1];
+      if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }))) return;
+      var dx = b.x - a.x, dz = b.z - a.z, hl = Math.hypot(dx, dz);
+      if (hl < 0.05) return;
+      var ux = dx / hl, uz = dz / hl, px = -uz * 1.3, pz = ux * 1.3, y0 = a.y - 0.03, y1 = b.y - 0.03;
+      var ax = a.x - ux * 0.8, az = a.z - uz * 0.8, bx = b.x + ux * 0.8, bz = b.z + uz * 0.8;
+      floor.push(ax + px, y0, az + pz, ax - px, y0, az - pz, bx - px, y1, bz - pz, ax + px, y0, az + pz, bx - px, y1, bz - pz, bx + px, y1, bz + pz);
+    });
     var fg = new THREE.Group();
-    [[tread, '#d5dae2'], [riser, '#a7afbc'], [wall, '#c3cad5']].forEach(function (d) {
+    [[tread, '#d5dae2'], [riser, '#a7afbc'], [wall, '#c3cad5'], [floor, '#d9dde4']].forEach(function (d) {
       if (!d[0].length) return;
       var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(d[0], 3)); geo.computeVertexNormals();
       fg.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: d[1], side: THREE.DoubleSide })));
@@ -2136,7 +2148,16 @@ var View3D = (function () {
       return true;
     }
     var pass = {}, shafts = [];
-    vertSegs = []; vertObjs = [];
+    vertSegs = []; vertObjs = []; flatSegs = [];
+    // 経路の平らな区間（階段のあいだの踊り場など）は、階段と同じく経路の位置（ならした後）で床の板を敷く
+    g.route.edges.forEach(function (ed, i) {
+      if (ed.mode === 2 || ed.mode === 4 || ed.mode === 5) return;
+      var pa = disp[i].clone(), pb = disp[i + 1].clone(); pa.y -= 0.8; pb.y -= 0.8;
+      if (Math.abs(pa.y - pb.y) > 0.1 || pa.distanceTo(pb) < 0.05) return;
+      var z = st.nodes[ed.a][2];
+      if (mapPolys && onMap((pa.x + pb.x) / 2, -(pa.z + pb.z) / 2, z)) return;
+      flatSegs.push([pa, pb]);
+    });
     st.links.forEach(function (l) {
       var a = V(st, l[0]), b = V(st, l[1]);
       var za = st.nodes[l[0]][2], zb = st.nodes[l[1]][2], key = Math.min(za, zb) + ':' + Math.max(za, zb);
@@ -2152,6 +2173,7 @@ var View3D = (function () {
         vertSegs.push([a.clone(), b.clone(), key, !!rv]); // 階段・エスカレーターは drawVert で（地下街と重なるものを後で除けるように）。4 番目: 経路が通る
         return;
       }
+      flatSegs.push([a.clone(), b.clone()]); // リアル視点の床の板（構内図・地下街の床の無い所）
       var w = 2.6, px = -dz / hl * w / 2, pz = dx / hl * w / 2;
       (pass[key] = pass[key] || []).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
         a.x - px, a.y, a.z - pz, b.x - px, b.y, b.z - pz, b.x + px, b.y, b.z + pz);
