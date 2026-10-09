@@ -1770,16 +1770,22 @@ var View3D = (function () {
   function drawVert(cells) {
     vertObjs.forEach(function (m) { scene.remove(m); var k = netMeshes.indexOf(m); if (k >= 0) netMeshes.splice(k, 1); });
     vertObjs = [];
-    var cMuted = css('--muted'), vert = {};
+    var cMuted = css('--muted'), vert = {}, vertR = {};
     if (fpvStairs) { scene.remove(fpvStairs); fpvStairs = null; }
     var tread = [], riser = [], wall = [];
     vertSegs.forEach(function (sg) {
       var a = sg[0], b = sg[1];
       if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }))) return;
       stairGeo(sg, tread, riser, wall);
-      var dx = b.x - a.x, dz = b.z - a.z, hl = Math.hypot(dx, dz), px = -dz / hl * 0.9, pz = dx / hl * 0.9;
-      (vert[sg[2]] = vert[sg[2]] || []).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
-        a.x - px, a.y, a.z - pz, b.x - px, b.y, b.z - pz, b.x + px, b.y, b.z + pz);
+      // 外から見るときも、斜めの帯ではなく段のある形（踏み面と蹴上げ）で描く（2026-10-09 利用者「構内図の階段、エスカレータについて、
+      // 斜め線ではなく、段がある絵にできる？」）。高さの差が小さく段が作れないものは前の帯のまま
+      var arr = vert[sg[2]] = vert[sg[2]] || [], n0 = arr.length, rs = vertR[sg[2]] = vertR[sg[2]] || [];
+      stairGeo([a, b, sg[2], false], arr, rs, []); // 踏み面は明るく、蹴上げは濃く（段が読めるように）
+      if (arr.length === n0) {
+        var dx = b.x - a.x, dz = b.z - a.z, hl = Math.hypot(dx, dz), px = -dz / hl * 0.9, pz = dx / hl * 0.9;
+        arr.push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
+          a.x - px, a.y, a.z - pz, b.x - px, b.y, b.z - pz, b.x + px, b.y, b.z + pz);
+      }
     });
     // 床の板: 構内図にも地下街にも床の無い平らな通路（踊り場など）。幅 2.6 m、両端を 0.8 m 伸ばしてつなぐ
     // （2026-10-09 利用者「階段途中の床が消えてるね」。リアル視点で通路網の帯を消したので、踊り場の床が無かった）
@@ -1800,9 +1806,12 @@ var View3D = (function () {
       fg.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: d[1], side: THREE.DoubleSide })));
     });
     fg.visible = fpv; fpvStairs = fg; scene.add(fg);
-    Object.keys(vert).forEach(function (key) {
-      var m = ribbonMesh(vert[key], cMuted, 0.55);
-      m.userData.base = 0.55; m.userData.lv = key.split(':').map(Number); m.userData.net = true; netMeshes.push(m); scene.add(m); vertObjs.push(m);
+    [[vert, css('--walk'), 0.5], [vertR, cMuted, 0.75]].forEach(function (d) {
+      Object.keys(d[0]).forEach(function (key) {
+        if (!d[0][key].length) return;
+        var m = ribbonMesh(d[0][key], d[1], d[2]);
+        m.userData.base = d[2]; m.userData.lv = key.split(':').map(Number); m.userData.net = true; netMeshes.push(m); scene.add(m); vertObjs.push(m);
+      });
     });
     shaftSegs.forEach(function (s) {
       if (cells && coveredBy(cells, [0.15, 0.5, 0.85].map(function (t) { return s[0].clone().lerp(s[1], t); }))) return;
