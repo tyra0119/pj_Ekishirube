@@ -1207,6 +1207,36 @@ var View3D = (function () {
     }
     col.needsUpdate = true; fl.needsUpdate = true;
   }
+  // 地下街の階段の段のへり: 地下街のモデルには階段の部品の種類が無く、踏み面は床、蹴上げは壁として入っている。高さ 5〜35 cm の縦の面を
+  // 蹴上げとみなし、その上の水平な辺（次の段へ下りるへり）に幅 6 cm の暗い帯を描く（2026-10-11 利用者「地下街の階段にも、段のへり
+  //（次の段へ下りる所）に細い暗い線を入れて」）。位置は置き直した後（立体図の高さ）、高さの判定は元の高さ（origY、m）で
+  function ubldNosing(meshes) {
+    var out = [], a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+    meshes.forEach(function (o) {
+      var g = o.geometry, p = g.attributes.position, idx = g.index, cnt = idx ? idx.count : p.count, oy = o.userData.origY;
+      if (!oy) return;
+      for (var t = 0; t + 2 < cnt; t += 3) {
+        var ii = [idx ? idx.getX(t) : t, idx ? idx.getX(t + 1) : t + 1, idx ? idx.getX(t + 2) : t + 2];
+        var ys = ii.map(function (i) { return oy[i]; }), top = Math.max.apply(null, ys), rise = top - Math.min.apply(null, ys);
+        if (rise < 0.05 || rise > 0.35) continue;
+        a.fromBufferAttribute(p, ii[0]); b.fromBufferAttribute(p, ii[1]); c.fromBufferAttribute(p, ii[2]);
+        e1.subVectors(b, a); e2.subVectors(c, a); e1.cross(e2);
+        var L = e1.length(); if (L < 1e-9 || Math.abs(e1.y / L) > 0.3) continue; // 縦の面だけ
+        var tops = ii.filter(function (i) { return oy[i] > top - 0.01; });
+        if (tops.length !== 2) continue; // 上の辺が水平な三角形（蹴上げの四角の片方）だけ
+        var P = new THREE.Vector3().fromBufferAttribute(p, tops[0]), Q = new THREE.Vector3().fromBufferAttribute(p, tops[1]);
+        var dx = Q.x - P.x, dz = Q.z - P.z, len = Math.hypot(dx, dz);
+        if (len < 0.2) continue;
+        var nx = -dz / len * 0.03, nz = dx / len * 0.03, y = Math.max(P.y, Q.y) + 0.01;
+        out.push(P.x + nx, y, P.z + nz, P.x - nx, y, P.z - nz, Q.x - nx, y, Q.z - nz, P.x + nx, y, P.z + nz, Q.x - nx, y, Q.z - nz, Q.x + nx, y, Q.z + nz);
+      }
+    });
+    if (!out.length) return null;
+    var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
+    var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: UBLD_WALL_DARK, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
+    m.renderOrder = 1; m.userData.city = 'ubld'; m.userData.keep = true;
+    return m;
+  }
   var ubldCache = {}, ubldReal = {}; // ubldReal: 駅 ID → 段のある通路の点の深さ（地下街を表示しているときだけ使う）
   var realY = null; // いま描いている駅で、深さを置き直す点の高さ（点の番号 → 高さ。使わないときは null）
   function ubldLevels(meshes, ground, st) {
@@ -1485,6 +1515,8 @@ var View3D = (function () {
       scene.add(grp);
       ubldGroup = grp;
       var ucells = ubldCells(grp);
+      var nose = ubldNosing(c.meshes); // 段のへりの帯（床と壁のます目を数えた後に足す）
+      if (nose) { grp.add(nose); netMeshes.push(nose); }
       drawVert(ucells);
       if (showSpaces && window.SPACES && SPACES[st.id] && spaceObjs.length) {
         var keep = spacesUnderUbld(SPACES[st.id], ucells);
