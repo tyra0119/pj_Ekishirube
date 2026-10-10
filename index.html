@@ -906,6 +906,10 @@ var View3D = (function () {
   try { var ca = parseFloat(localStorage.getItem('ekishirube.cityAlpha')); if (ca >= 0 && ca <= 1) cityAlpha = ca; } catch (e) {}
   var photoCity = false; // 写真の街並み。重いので選んだときだけ読み込む
   try { photoCity = localStorage.getItem('ekishirube.photo') === '1'; } catch (e) {}
+  // 地下街（PLATEAU の地下街モデル）の濃さ（0〜1。利用者が調整。2026-10-11 利用者「地下街の透明度設定、明暗について、エキしらべにも反映してほしい」。
+  // Machiawase と同じ）。初めは前の固定の値 0.22。案内中はその 0.55 倍（前の固定の 0.12 にあたる）。リアル視点では中から見るのでいつも不透明
+  var ubldAlpha = 0.22;
+  try { var ua = parseFloat(localStorage.getItem('ekishirube.ubldAlpha')); if (ua >= 0 && ua <= 1) ubldAlpha = ua; } catch (e) {}
   var statusEl = null;
   // 地下街: 一旦ボタンごと出さない（2026-10-08 利用者「一旦、地下街（お試し）ボタンも非表示にして」）。戻すときは true に
   var UBLD_ENABLED = true; // 2026-10-08 新宿西口の直したデータで再表示（利用者「このファイルを使い、再度、地下街を表示してみてほしい」）
@@ -1146,6 +1150,50 @@ var View3D = (function () {
   // 駅ごとに消す地下街の面（gml_id）。通路網が突き抜けている本当の壁（2026-10-08 利用者「上記 2 件の壁は、消して」）:
   // 新宿西口 D1 の出入口の先（402N0020→402N0187）の細い仕切り 2 面と、ホームへ下りる手前（402N0175→402N0220）の壁 2 面
   var UBLD_HIDE = { '402': { 'bdry_7e4c5782-b3ad-48d5-a56c-05a678fa4fd0': 1, 'bdry_1cd36a68-d3bb-4f94-842a-1d4ca3157add': 1, 'bdry_2ef855c3-ad42-4d3b-afd5-0592c8392d98': 1, 'bdry_a2505b93-a24e-4a6a-a3c0-92a2b85447aa': 1 } };
+  // 地下街の面の色（Machiawase と同じ。2026-10-11）。1 色だと横から見たときに立体に見えなかった。床は濃いめ（深い所ほど暗く）で、
+  // 約 5 m 角の市松の明暗を描く（ubldFloorTiles。描くときに位置から決める）。壁は向きで明るさを変える（南西寄りを向く面が明るく、反対は暗く）
+  var UBLD_FLOOR = new THREE.Color(0x7f90b2), UBLD_FLOOR_DARK = new THREE.Color(0x5d6f96), UBLD_STEP = new THREE.Color(0x9fadc8), UBLD_CEIL = new THREE.Color(0xb9c6dc),
+    UBLD_WALL_DARK = new THREE.Color(0x64728f), UBLD_WALL_LIGHT = new THREE.Color(0xf0f3f8);
+  function ubldFloorTiles(mat) {
+    mat.onBeforeCompile = function (sh) {
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float ufloor;\nvarying float vFloor;\nvarying vec2 vFloorXZ;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFloor = ufloor; vFloorXZ = (modelMatrix * vec4(position, 1.0)).xz;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFloor;\nvarying vec2 vFloorXZ;')
+        .replace('#include <color_fragment>', '#include <color_fragment>\nif (vFloor > 0.5) { vec2 q = floor(vFloorXZ / 5.0); diffuseColor.rgb *= mod(q.x + q.y, 2.0) < 0.5 ? 0.86 : 1.08; }');
+    };
+    mat.customProgramCacheKey = function () { return 'ubldFloorTiles'; };
+  }
+  function ubldColors(o, ground) {
+    var g = o.geometry, p = g.attributes.position, idx = g.index, cnt = idx ? idx.count : p.count;
+    var ft = o.userData.ftype, oy = o.userData.origY, bid = g.attributes._batchid || g.attributes._feature_id_0;
+    var col = g.attributes.color;
+    if (!col) { col = new THREE.BufferAttribute(new Float32Array(p.count * 3), 3); g.setAttribute('color', col); }
+    var fl = g.attributes.ufloor; // 1: 床（市松の明暗を描く）
+    if (!fl) { fl = new THREE.BufferAttribute(new Float32Array(p.count), 1); g.setAttribute('ufloor', fl); }
+    var a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), cc = new THREE.Color();
+    var lx = -0.6, lz = 0.8; // 壁を明るくする向き（水平。立体図の光とおおよそ同じ）
+    for (var t = 0; t + 2 < cnt; t += 3) {
+      var i0 = idx ? idx.getX(t) : t, i1 = idx ? idx.getX(t + 1) : t + 1, i2 = idx ? idx.getX(t + 2) : t + 2;
+      a.fromBufferAttribute(p, i0); b.fromBufferAttribute(p, i1); c.fromBufferAttribute(p, i2);
+      e1.subVectors(b, a); e2.subVectors(c, a); e1.cross(e2);
+      var L = e1.length(); if (L < 1e-9) continue;
+      e1.divideScalar(L);
+      var ty = ft && bid ? ft[bid.getX(i0)] : '';
+      if (ty === 'uro:CeilingSurface' || ty === 'uro:RoofSurface') cc.copy(UBLD_CEIL);
+      else if (ty === 'uro:FloorSurface' || ty === 'uro:GroundSurface') {
+        var kd = oy && ground != null ? Math.min(1, Math.max(0, (ground - oy[i0] - 5) / 8)) : 0; // 地下 5 m から 13 m で 0〜1
+        cc.copy(UBLD_FLOOR).lerp(UBLD_FLOOR_DARK, kd);
+        if (e1.y > 0) { fl.setX(i0, 1); fl.setX(i1, 1); fl.setX(i2, 1); }
+      }
+      else if (Math.abs(e1.y) > 0.7) cc.copy(ty || e1.y < 0 ? UBLD_STEP : UBLD_FLOOR); // 設備（階段など）の水平な面。部品の種類の無い箱（LOD1）は上の面を床に
+      else {
+        var h = Math.hypot(e1.x, e1.z) || 1, k = 0.5 + 0.5 * (e1.x * lx + e1.z * lz) / h;
+        cc.copy(UBLD_WALL_DARK).lerp(UBLD_WALL_LIGHT, k);
+      }
+      col.setXYZ(i0, cc.r, cc.g, cc.b); col.setXYZ(i1, cc.r, cc.g, cc.b); col.setXYZ(i2, cc.r, cc.g, cc.b);
+    }
+    col.needsUpdate = true; fl.needsUpdate = true;
+  }
   var ubldCache = {}, ubldReal = {}; // ubldReal: 駅 ID → 段のある通路の点の深さ（地下街を表示しているときだけ使う）
   var realY = null; // いま描いている駅で、深さを置き直す点の高さ（点の番号 → 高さ。使わないときは null）
   function ubldLevels(meshes, ground, st) {
@@ -1395,7 +1443,8 @@ var View3D = (function () {
           }
           o.geometry.setIndex(keepIdx);
         }
-        o.material = new THREE.MeshLambertMaterial({ color: 0xb9c6dc, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+        o.material = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }); // 色は面ごと（ubldColors）
+        ubldFloorTiles(o.material);
         o.renderOrder = 1; o.userData.city = 'ubld'; o.userData.keep = true;
       });
       mins.sort(function (a, b) { return a - b; });
@@ -1415,6 +1464,7 @@ var View3D = (function () {
         var p = o.geometry.attributes.position, oy = o.userData.origY;
         for (var k = 0; k < p.count; k++) p.setY(k, depthToY(oy[k] - u.ground, c.pts));
         p.needsUpdate = true; o.geometry.computeVertexNormals(); o.geometry.computeBoundingSphere();
+        ubldColors(o, u.ground);
         if (o.parent) o.parent.remove(o);
         o.position.set(0, 0, 0); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1); o.updateMatrix();
         grp.add(o); netMeshes.push(o);
@@ -2605,16 +2655,13 @@ var View3D = (function () {
       else if (u.city === 'edge') b = photo ? 0 : cityAlpha * 0.9;
       else if (u.city === 'photo') b = alphaCurve(0.6); // 写真の建物: 初めの 15% で 0.6
       else if (u.city === 'photoground') b = u.loaded ? alphaCurve(0.58) : 0;
-      else if (u.city === 'ubld') {
-        b = fpv ? 1 : 0.22;
-        if (u.fpvMat !== fpv) { m.material.transparent = !fpv; m.material.depthWrite = fpv; m.material.needsUpdate = true; u.fpvMat = fpv; } // 中から見るときはふつうの壁・床・天井
-      } // 航空写真: 地下の通路網が透けて見えるように薄め
+      else if (u.city === 'ubld') b = fpv ? 1 : ubldAlpha; // 中から見るときはふつうの壁・床・天井
       else b = u.base;
       if (sel) {
         // いま歩いている階は濃く、ほかの階は薄く
         if (u.lv) b = (u.lv[1] >= sel.lo - 0.01 && u.lv[0] <= sel.hi + 0.01) ? Math.min(1, b * 1.6) : b * 0.25;
         // 案内中は建物を消す（経路に被らないように）。道路は地上にかかる手順だけ、場所の手がかりとして薄く残す
-        else if (u.city === 'ubld') b = fpv ? 1 : 0.12; // 地下街は案内中も、地下の空間の手がかりとして薄く残す（中から見るときは透明にしない）
+        else if (u.city === 'ubld') b = fpv ? 1 : ubldAlpha * 0.55; // 地下街は案内中も、地下の空間の手がかりとして薄く残す（中から見るときは透明にしない）
         else b = (u.city === 'road' && sel.hi > -0.01) ? b * 0.35 : 0; // 写真の街並み（建物・航空写真）は案内中はすべて消す
       }
       // リアル視点では、構内図の床は不透明な床に（地下街の床に近い明るい色。2026-10-09 利用者「リアル視点で案内中の構内図の床が半透明に
@@ -2625,6 +2672,8 @@ var View3D = (function () {
       }
       if (fpv && u.space) b = u.outline ? 0 : 1;
       if (fpv && u.net) b = 0;
+      // 地下街: リアル視点か濃さ 100% なら不透明な壁・床・天井として描く（奥が透けない）
+      if (u.city === 'ubld') { var uo = b >= 0.999; if (u.fpvMat !== uo) { m.material.transparent = !uo; m.material.depthWrite = uo; m.material.needsUpdate = true; u.fpvMat = uo; } }
       m.material.opacity = b;
       m.visible = b > 0.003;
     });
@@ -2867,8 +2916,13 @@ var View3D = (function () {
     try { localStorage.setItem('ekishirube.cityAlpha', String(a)); } catch (e) {}
     applyOpacity();
   }
+  function setUbldAlpha(a) {
+    ubldAlpha = a;
+    try { localStorage.setItem('ekishirube.ubldAlpha', String(a)); } catch (e) {}
+    applyOpacity();
+  }
 
-  return { build: build, setDepth: setDepth, setCity: setCity, setPhotoCity: setPhotoCity, get photoCity() { return photoCity; }, setUbld: setUbld, get ubld() { return showUbld; }, setSpaces: setSpaces, get spaces() { return showSpaces; }, hasSpaces: function (st) { return !!(st && window.SPACES && SPACES[st.id] && SPACES[st.id].length); }, setFpv: function (on) { if (camera) setFpv(on); }, get fpv() { return fpv; }, canFpv: function (st) { return !!(UBLD_ENABLED && st && window.UBLD && UBLD.stations && UBLD.stations[st.id] && UBLD.stations[st.id].lod === 'LOD4'); }, hasUbld: function (st) { return !!(UBLD_ENABLED && st && window.UBLD && UBLD.stations && UBLD.stations[st.id]); }, get ubldEnabled() { return UBLD_ENABLED; }, get hasPhoto() { return !!(window.TILES && TILES.stations); }, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
+  return { build: build, setDepth: setDepth, setCity: setCity, setPhotoCity: setPhotoCity, get photoCity() { return photoCity; }, setUbld: setUbld, get ubld() { return showUbld; }, setSpaces: setSpaces, get spaces() { return showSpaces; }, hasSpaces: function (st) { return !!(st && window.SPACES && SPACES[st.id] && SPACES[st.id].length); }, setFpv: function (on) { if (camera) setFpv(on); }, get fpv() { return fpv; }, canFpv: function (st) { return !!(UBLD_ENABLED && st && window.UBLD && UBLD.stations && UBLD.stations[st.id] && UBLD.stations[st.id].lod === 'LOD4'); }, hasUbld: function (st) { return !!(UBLD_ENABLED && st && window.UBLD && UBLD.stations && UBLD.stations[st.id]); }, get ubldEnabled() { return UBLD_ENABLED; }, get hasPhoto() { return !!(window.TILES && TILES.stations); }, setCityAlpha: setCityAlpha, get cityAlpha() { return cityAlpha; }, setUbldAlpha: setUbldAlpha, get ubldAlpha() { return ubldAlpha; }, get city() { return showCity; }, get hasCity() { return !!(window.CITY && CITY.stations); }, get depth() { return depth; }, view: setView, highlight: highlight, focus: focus,
     set onStep(fn) { onStep = fn; }, set onPlay(fn) { onPlay = fn; },
     // 続きから: 再開する手順（無ければ -1）、手動の案内を閉じた手順を覚える、最初からに戻す
     get resumeStep() { return resumeU !== null && resumeU > 0 && resumeU < 1 && total ? stepAt(Math.min(1, resumeU + 0.5 / total)) : -1; },
@@ -3082,6 +3136,8 @@ var View3D = (function () {
               (View3D.canFpv(st) ? '<button type="button" id="fpv-toggle" aria-pressed="' + View3D.fpv + '" title="地下街の中を人の目の高さで歩いて見る。床の↑と壁の案内板で進む向きを示す">リアル視点</button>' : '') +
             '</div><div class="knobs">' +
             (View3D.hasCity ? '<label class="depth" for="city-a" id="city-a-wrap"' + (View3D.city ? '' : ' hidden') + '>街並みの濃さ<input type="range" id="city-a" min="0" max="1" step="0.05" value="' + View3D.cityAlpha + '"><output id="city-a-v">' + Math.round(View3D.cityAlpha * 100) + '%</output></label>' : '') +
+            // 地下街の濃さ（2026-10-11 利用者「地下街の透明度設定、明暗について、エキしらべにも反映してほしい」）。地下街を出しているときだけ
+            (View3D.hasUbld(st) ? '<label class="depth" for="ubld-a" id="ubld-a-wrap"' + (View3D.ubld ? '' : ' hidden') + ' title="PLATEAU の地下街モデルの壁・床・天井の濃さ。案内中はこの半分ほど。リアル視点ではいつも不透明">地下街の濃さ<input type="range" id="ubld-a" min="0" max="1" step="0.05" value="' + View3D.ubldAlpha + '"><output id="ubld-a-v">' + Math.round(View3D.ubldAlpha * 100) + '%</output></label>' : '') +
             '</div></div></section>' +
       '<div class="figs2">' +
           '<section class="panel" aria-labelledby="h-plat"><h2 id="h-plat">ホームのどこか</h2><p class="hint">電車の向きと、使う昇降設備の位置です。</p><div class="svgbox">' + platformSVG(g) + '</div></section>' +
@@ -3107,11 +3163,12 @@ var View3D = (function () {
       var on = !View3D.ubld;
       View3D.setUbld(on);
       this.setAttribute('aria-pressed', on);
+      if ($('ubld-a-wrap')) $('ubld-a-wrap').hidden = !on;
       if ($('fpv-toggle')) $('fpv-toggle').setAttribute('aria-pressed', View3D.fpv);
     });
     if ($('fpv-toggle')) $('fpv-toggle').addEventListener('click', function () {
       var on = !View3D.fpv;
-      if (on && !View3D.ubld) { View3D.setUbld(true); if ($('ubld-toggle')) $('ubld-toggle').setAttribute('aria-pressed', true); } // リアル視点には地下街が要る
+      if (on && !View3D.ubld) { View3D.setUbld(true); if ($('ubld-toggle')) $('ubld-toggle').setAttribute('aria-pressed', true); if ($('ubld-a-wrap')) $('ubld-a-wrap').hidden = false; } // リアル視点には地下街が要る
       View3D.setFpv(on);
       this.setAttribute('aria-pressed', View3D.fpv);
     });
@@ -3124,6 +3181,11 @@ var View3D = (function () {
       var a = parseFloat(this.value);
       $('city-a-v').textContent = Math.round(a * 100) + '%';
       View3D.setCityAlpha(a);
+    });
+    if ($('ubld-a')) $('ubld-a').addEventListener('input', function () {
+      var a = parseFloat(this.value);
+      $('ubld-a-v').textContent = Math.round(a * 100) + '%';
+      View3D.setUbldAlpha(a);
     });
     // 続きがあれば、その手順から案内する（2026-10-08 利用者「途中まで自動で移動したあとに、案内をはじめるを押した場合も途中から」）
     $('nav-start').addEventListener('click', function () { var r = View3D.resumeStep; startNav(r > 0 ? r : 0); });
