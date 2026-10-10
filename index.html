@@ -226,8 +226,8 @@ footer a { color: inherit; }
 .start { font: inherit; font-weight: 700; font-size: 16px; padding: 12px; border-radius: 10px; border: 1px solid var(--sel); cursor: pointer;
   background: var(--sel); color: #fff; }
 .start:hover { filter: brightness(1.08); }
-/* 要約のボタン: 案内カードの「もどる・つぎへ」（.navctl）と同じ 2 列。右が「案内をはじめる」（つぎへと同じ位置） */
-.acts { display: grid; grid-template-columns: 1fr 1.6fr; gap: 10px; width: 100%; }
+/* 要約のボタン: 「案内開始（自動進行）」と「案内開始（手動進行）」は同じ幅（2026-10-11 利用者「自動と手動のボタン幅は同じでいいのでは？」） */
+.acts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; width: 100%; }
 .share { font: inherit; font-weight: 700; font-size: 13px; padding: 5px 10px; border-radius: 999px; cursor: pointer;
   border: 1px solid var(--line); background: var(--surface); color: var(--ink); display: inline-flex; align-items: center; gap: 5px;
   position: absolute; top: 10px; right: 12px; }
@@ -240,6 +240,7 @@ footer a { color: inherit; }
 /* 続きから: どこから再開するかと「最初からにする」 */
 .resume { grid-column: 1 / -1; margin: 0; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .resume[hidden] { display: none; }
+.acts .mode { display: inline-block; }
 .fpvopt { grid-column: 1 / -1; font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
 .fpvopt input { width: 18px; height: 18px; accent-color: var(--sel); margin: 0; }
 .navauto button { font: inherit; font-size: 13px; font-weight: 700; color: var(--sel); background: none; border: 1px solid var(--sel); border-radius: 999px; padding: 2px 10px; margin-left: 6px; cursor: pointer; }
@@ -3242,8 +3243,8 @@ var View3D = (function () {
       // 案内をはじめるの時にリアル視点にするか選択できるようにしたほうが親切」「『案内開始（自動進行）』『案内開始（手動進行）』、これに、リアル視点にするか、もつけたい」
       '<div class="acts"><p class="resume" id="resume" hidden></p>' +
       (View3D.canFpv(state.st) ? '<label class="fpvopt"><input type="checkbox" id="fpv-opt"' + (fpvPref() ? ' checked' : '') + '>リアル視点で案内する（地下街の中を目の高さで歩いて見る）</label>' : '') +
-      '<button type="button" class="auto" id="auto-walk" aria-pressed="false" title="経路全体を自動で歩いて案内する（手順は左の案内カードに）">▶ 案内開始（自動進行）</button>' +
-      '<button type="button" class="start" id="nav-start" title="1 手順ずつ「つぎへ」で進める">▶ 案内開始（手動進行）</button></div></div>';
+      '<button type="button" class="auto" id="auto-walk" aria-pressed="false" title="経路全体を自動で歩いて案内する（手順は左の案内カードに）">▶ 案内開始<span class="mode">（自動進行）</span></button>' +
+      '<button type="button" class="start" id="nav-start" title="1 手順ずつ「つぎへ」で進める">▶ 案内開始<span class="mode">（手動進行）</span></button></div></div>';
   }
 
   function stepIcon(s) {
@@ -3476,9 +3477,10 @@ var View3D = (function () {
     View3D.setResumeStep(i);
     View3D.view('play');
   }
+  // 終了: 手動と同じく、止めた所を覚えて「続きから（自動進行）」で再開できるようにする（歩き終えていれば最初から）
   function endAutoNav() {
     state.auto = false;
-    View3D.endPlay();
+    if (state.playing) View3D.view('play'); // その場で止める（続きの位置を覚える）
     leaveView();
     state.nav = -1;
     document.body.classList.remove('nav-on');
@@ -3509,8 +3511,9 @@ var View3D = (function () {
     var r = View3D.resumeStep, box = $('resume'), a = $('auto-walk'), b = $('nav-start');
     if (!box || !a || !b) return;
     var cont = r > 0 && state.g && state.g.steps[r];
-    a.textContent = cont ? '▶ 続きから（自動進行）' : '▶ 案内開始（自動進行）';
-    b.textContent = cont ? '▶ 続きから（手動進行）' : '▶ 案内開始（手動進行）';
+    // かっこの部分はひとかたまり（狭い画面でも「▶ 案内開始」「（自動進行）」の 2 行で折り返す）
+    a.innerHTML = (cont ? '▶ 続きから' : '▶ 案内開始') + '<span class="mode">（自動進行）</span>';
+    b.innerHTML = (cont ? '▶ 続きから' : '▶ 案内開始') + '<span class="mode">（手動進行）</span>';
     box.hidden = !cont;
     if (cont) {
       box.innerHTML = '<span>手順 <b>' + (r + 1) + '</b>「' + esc(state.g.steps[r].title) + '」から再開します</span><button type="button" id="restart">最初からにする</button>';
