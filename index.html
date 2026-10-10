@@ -233,13 +233,17 @@ footer a { color: inherit; }
   position: absolute; top: 10px; right: 12px; }
 .share:hover { border-color: var(--sel); color: var(--sel); }
 /* 自動で歩く（進め方: 案内をはじめる = 手動、自動で歩く = 自動。見え方は立体図の上のボタン） */
-.auto { font: inherit; font-weight: 700; font-size: 16px; padding: 12px; border-radius: 10px; cursor: pointer; white-space: nowrap;
+.auto { font: inherit; font-weight: 700; font-size: 16px; padding: 12px; border-radius: 10px; cursor: pointer;
   border: 1px solid var(--sel); background: var(--surface); color: var(--sel); }
 .auto:hover { filter: brightness(1.08); }
 .auto[aria-pressed="true"] { background: var(--sel); color: #fff; }
 /* 続きから: どこから再開するかと「最初からにする」 */
 .resume { grid-column: 1 / -1; margin: 0; font-size: 13px; color: var(--muted); display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .resume[hidden] { display: none; }
+.fpvopt { grid-column: 1 / -1; font-size: 13px; display: flex; align-items: center; gap: 6px; cursor: pointer; }
+.fpvopt input { width: 18px; height: 18px; accent-color: var(--sel); margin: 0; }
+.navauto button { font: inherit; font-size: 13px; font-weight: 700; color: var(--sel); background: none; border: 1px solid var(--sel); border-radius: 999px; padding: 2px 10px; margin-left: 6px; cursor: pointer; }
+body.nav-on .summary .acts { display: none; } /* 案内中は、案内開始のボタンを隠す（案内カードで進める） */
 .resume b { color: var(--ink); }
 .resume button { font: inherit; font-size: 13px; font-weight: 700; color: var(--sel); background: none; border: 0; padding: 2px 0; cursor: pointer; text-decoration: underline; }
 .toast { position: fixed; left: 50%; bottom: calc(96px + env(safe-area-inset-bottom, 0px)); translate: -50% 0; z-index: 30; pointer-events: none;
@@ -1151,7 +1155,7 @@ var View3D = (function () {
   // 新宿西口 D1 の出入口の先（402N0020→402N0187）の細い仕切り 2 面と、ホームへ下りる手前（402N0175→402N0220）の壁 2 面
   var UBLD_HIDE = { '402': { 'bdry_7e4c5782-b3ad-48d5-a56c-05a678fa4fd0': 1, 'bdry_1cd36a68-d3bb-4f94-842a-1d4ca3157add': 1, 'bdry_2ef855c3-ad42-4d3b-afd5-0592c8392d98': 1, 'bdry_a2505b93-a24e-4a6a-a3c0-92a2b85447aa': 1 } };
   // 地下街の面の色（Machiawase と同じ。2026-10-11）。1 色だと横から見たときに立体に見えなかった。床は濃いめ（深い所ほど暗く）で、
-  // 約 5 m 角の市松の明暗を描く（ubldFloorTiles。描くときに位置から決める）。壁は向きで明るさを変える（南西寄りを向く面が明るく、反対は暗く）
+  // 約 2 m 角の市松の明暗を描く（ubldFloorTiles。描くときに位置から決める。2026-10-11 利用者「床のタイル、もっと小さくしてほしい」で 5 m → 2 m）。壁は向きで明るさを変える（南西寄りを向く面が明るく、反対は暗く）
   var UBLD_FLOOR = new THREE.Color(0x7f90b2), UBLD_FLOOR_DARK = new THREE.Color(0x5d6f96), UBLD_STEP = new THREE.Color(0x9fadc8), UBLD_CEIL = new THREE.Color(0xb9c6dc),
     UBLD_WALL_DARK = new THREE.Color(0x64728f), UBLD_WALL_LIGHT = new THREE.Color(0xf0f3f8);
   // 天井（CeilingSurface・RoofSurface。ufloor = 2）は、外から見る立体図では描かない（中が見えるように）。リアル視点では描く
@@ -1163,7 +1167,7 @@ var View3D = (function () {
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float ufloor;\nvarying float vFloor;\nvarying vec2 vFloorXZ;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFloor = ufloor; vFloorXZ = (modelMatrix * vec4(position, 1.0)).xz;');
       sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFloor;\nvarying vec2 vFloorXZ;\nuniform float uHideCeil;')
-        .replace('#include <color_fragment>', '#include <color_fragment>\nif (vFloor > 1.5) { if (uHideCeil > 0.5) discard; }\nelse if (vFloor > 0.5) { vec2 q = floor(vFloorXZ / 5.0); diffuseColor.rgb *= mod(q.x + q.y, 2.0) < 0.5 ? 0.86 : 1.08; }');
+        .replace('#include <color_fragment>', '#include <color_fragment>\nif (vFloor > 1.5) { if (uHideCeil > 0.5) discard; }\nelse if (vFloor > 0.5) { vec2 q = floor(vFloorXZ / 2.0); diffuseColor.rgb *= mod(q.x + q.y, 2.0) < 0.5 ? 0.86 : 1.08; }');
     };
     mat.customProgramCacheKey = function () { return 'ubldFloorTiles'; };
   }
@@ -2033,7 +2037,7 @@ var View3D = (function () {
       var ln = lines[lv] = lines[lv] || [];
       rings.forEach(function (r) { r.forEach(function (p, i) { var q = r[(i + 1) % r.length]; ln.push(p.x, y + 0.02, -p.y, q.x, y + 0.02, -q.y); }); });
     });
-    // 構内図の床は、地下街の床と同じ材質・色にする（区別しない）: 床は地下街の床の色（深い階ほど暗く）と約 5 m 角の市松の明暗、
+    // 構内図の床は、地下街の床と同じ材質・色にする（区別しない）: 床は地下街の床の色（深い階ほど暗く）と約 2 m 角の市松の明暗、
     // 階段・エスカレーター・エレベーターの範囲は地下街の階段の色。改札内・トイレの部屋も同じ床の色。濃さは地下街と同じつまみ（applyOpacity）
     // （2026-10-11 利用者「駅構内図と地下街の床を同じにしたい。要は、駅構内図と地下街は区別したくない」）
     Object.keys(fills).forEach(function (key) {
@@ -2963,7 +2967,7 @@ var View3D = (function () {
 (function () {
   var $ = function (id) { return document.getElementById(id); };
   var NS = 'http://www.w3.org/2000/svg';
-  var state = { st: null, hover: -1, g: null, nav: -1 };
+  var state = { st: null, hover: -1, g: null, nav: -1, auto: false, playing: false }; // auto: 自動進行で案内中、playing: 自動で歩いている最中
 
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
 
@@ -3135,7 +3139,7 @@ var View3D = (function () {
       if (to.type === 'plat') syncCarSel('to', g0.steps[g0.steps.length - 1].car);
     }
     if (!g) { out.innerHTML = noRoute(st, from, to, pr); bindAlts(); return; }
-    state.g = g; state.nav = -1; document.body.classList.remove('nav-on');
+    state.g = g; state.nav = -1; state.auto = false; document.body.classList.remove('nav-on');
     out.innerHTML =
       summaryHTML(g, from, to) +
       '<div class="main">' +
@@ -3147,7 +3151,6 @@ var View3D = (function () {
               (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
               (View3D.hasPhoto ? '<button type="button" id="photo-toggle" aria-pressed="' + View3D.photoCity + '" title="PLATEAU の写真付きの建物と、航空写真の地面に切り替える（データが多いので通信に注意）"' + (View3D.city ? '' : ' hidden') + '>写真の街並み</button>' : '') +
               (View3D.hasUbld(st) ? '<button type="button" id="ubld-toggle" aria-pressed="' + View3D.ubld + '" title="PLATEAU の地下街モデル（壁・床。天井はリアル視点だけ）を重ねる。深さは通路網の階に合わせて伸ばしている">地下街</button>' : '') +
-              (View3D.canFpv(st) ? '<button type="button" id="fpv-toggle" aria-pressed="' + View3D.fpv + '" title="地下街の中を人の目の高さで歩いて見る。床の↑と壁の案内板で進む向きを示す">リアル視点</button>' : '') +
             '</div><div class="knobs">' +
             (View3D.hasCity ? '<label class="depth" for="city-a" id="city-a-wrap"' + (View3D.city ? '' : ' hidden') + '>街並みの濃さ<input type="range" id="city-a" min="0" max="1" step="0.05" value="' + View3D.cityAlpha + '"><output id="city-a-v">' + Math.round(View3D.cityAlpha * 100) + '%</output></label>' : '') +
             // 地下街の濃さ（2026-10-11 利用者「地下街の透明度設定、明暗について、エキしらべにも反映してほしい」）。構内図の床も同じつまみで
@@ -3204,11 +3207,9 @@ var View3D = (function () {
     });
     // 続きがあれば、その手順から案内する（2026-10-08 利用者「途中まで自動で移動したあとに、案内をはじめるを押した場合も途中から」）
     $('nav-start').addEventListener('click', function () { var r = View3D.resumeStep; startNav(r > 0 ? r : 0); });
+    if ($('fpv-opt')) $('fpv-opt').addEventListener('change', function () { try { localStorage.setItem('ekishirube.fpvOpt', this.checked ? '1' : '0'); } catch (e) {} });
     // 自動で歩く（前の「歩く様子」）。2026-10-08 利用者「左にボタンを集めた方がいいのではないか」→ 進め方（手動・自動）を左に、見え方を立体図の上に
-    $('auto-walk').addEventListener('click', function () {
-      View3D.view('play');
-      if (window.innerWidth < 900 && $('stage')) $('stage').scrollIntoView({ behavior: 'smooth', block: 'center' }); // スマホは立体図が下にあるので見せる
-    });
+    $('auto-walk').addEventListener('click', startAuto);
     $('share').addEventListener('click', shareRoute);
     document.querySelectorAll('[data-view]').forEach(function (b) {
       b.addEventListener('click', function () { View3D.view(b.dataset.view); if ($('fpv-toggle')) $('fpv-toggle').setAttribute('aria-pressed', View3D.fpv); });
@@ -3233,8 +3234,12 @@ var View3D = (function () {
       '</div>' +
       '<button type="button" class="share" id="share" title="この案内のリンクを送る（開くと同じ案内が出ます）">' + icon('share', 16) + '共有</button>' +
       // 案内カードの「もどる・つぎへ」と同じ並び・大きさ（「案内をはじめる」を「つぎへ」と同じ右の位置に。2026-10-08 利用者「案内をはじめるボタンの位置と、次へボタンの位置が違うから、操作に違和感がある」）
-      '<div class="acts"><p class="resume" id="resume" hidden></p><button type="button" class="auto" id="auto-walk" aria-pressed="false" title="経路全体を自動で歩いて見せる（リアル視点のときは目の高さで）">▶ 自動で歩く</button>' +
-      '<button type="button" class="start" id="nav-start" title="1 手順ずつ「つぎへ」で進める">▶ 案内をはじめる</button></div></div>';
+      // 進め方のボタンと、リアル視点で案内するか（リアル視点のある駅だけ）。2026-10-11 利用者「地図上の『リアル視点』は意味ないな。自動で歩く、
+      // 案内をはじめるの時にリアル視点にするか選択できるようにしたほうが親切」「『案内開始（自動進行）』『案内開始（手動進行）』、これに、リアル視点にするか、もつけたい」
+      '<div class="acts"><p class="resume" id="resume" hidden></p>' +
+      (View3D.canFpv(state.st) ? '<label class="fpvopt"><input type="checkbox" id="fpv-opt"' + (fpvPref() ? ' checked' : '') + '>リアル視点で案内する（地下街の中を目の高さで歩いて見る）</label>' : '') +
+      '<button type="button" class="auto" id="auto-walk" aria-pressed="false" title="経路全体を自動で歩いて案内する（手順は左の案内カードに）">▶ 案内開始（自動進行）</button>' +
+      '<button type="button" class="start" id="nav-start" title="1 手順ずつ「つぎへ」で進める">▶ 案内開始（手動進行）</button></div></div>';
   }
 
   function stepIcon(s) {
@@ -3432,27 +3437,76 @@ var View3D = (function () {
 
   // ---------- 案内カード（1 手順ずつ） ----------
   // 屋内では現在地が取れないので、利用者が「つぎへ」で進める（walkbavi と同じ考え方）
+  // リアル視点で案内するか（「リアル視点で案内する」にチェック。この端末に覚える）。案内を始めるときにリアル視点にし、終えたら戻す
+  function fpvPref() { try { return localStorage.getItem('ekishirube.fpvOpt') === '1'; } catch (e) { return false; } }
+  function enterView() {
+    if (!$('fpv-opt') || !$('fpv-opt').checked || !View3D.canFpv(state.st)) return;
+    if (!View3D.ubld) { View3D.setUbld(true); if ($('ubld-toggle')) $('ubld-toggle').setAttribute('aria-pressed', true); if ($('ubld-a-wrap')) $('ubld-a-wrap').hidden = false; } // リアル視点には地下街が要る
+    if (!View3D.fpv) View3D.setFpv(true);
+  }
+  function leaveView() { if (View3D.fpv) View3D.setFpv(false); }
+  function scrollToStage() {
+    // スマホでは、立体図（上に貼り付く）とそのすぐ下の案内カードが画面に収まる位置へ
+    if (window.matchMedia && matchMedia('(max-width: 960px)').matches) {
+      window.scrollTo({ top: document.querySelector('.main').getBoundingClientRect().top + window.scrollY, behavior: 'auto' }); // 立体図が貼り付く前の位置（.main の先頭）
+    }
+  }
+  // 自動進行: 手動と同じ案内カードを出し、歩いている手順に合わせてカードを替える（2026-10-11 利用者「手動で案内しているときと自動で案内して
+  // いる時の左のUIが違うのが嫌。手動に合わせて」）。「もどる・つぎへ」はその手順から歩き直す。止める・再開はカードの中のボタン
+  function startAuto() {
+    state.auto = true;
+    enterView();
+    var r = View3D.resumeStep;
+    state.nav = r > 0 ? r : 0;
+    document.body.classList.add('nav-on');
+    renderNav(); listSel(state.nav);
+    View3D.view('play');
+    scrollToStage();
+  }
+  function autoJump(i) {
+    var n = state.g.steps.length;
+    i = Math.max(0, Math.min(n - 1, i));
+    if (state.playing) View3D.view('play'); // いったん止める
+    state.nav = i; renderNav(); listSel(i);
+    if (i === n - 1) { View3D.highlight(i); return; } // 到着: 歩かずに到着のカード
+    View3D.setResumeStep(i);
+    View3D.view('play');
+  }
+  function endAutoNav() {
+    state.auto = false;
+    View3D.endPlay();
+    leaveView();
+    state.nav = -1;
+    document.body.classList.remove('nav-on');
+    $('navbox').innerHTML = '';
+    syncSel(-1);
+    View3D.focus(-1);
+    syncResume();
+  }
+  // 歩く順番の行と断面図の色分けだけ（立体図は動かさない）
+  function listSel(i) {
+    document.querySelectorAll('ol.steps li').forEach(function (l) { l.classList.toggle('on', +l.dataset.i === i); });
+    var on = document.querySelector('ol.steps li.on');
+    if (on && window.matchMedia && matchMedia('(min-width: 961px) and (min-height: 600px)').matches) on.scrollIntoView({ block: 'nearest' });
+    document.querySelectorAll('.seg-g').forEach(function (gg) { gg.classList.toggle('on', +gg.dataset.i === i); });
+  }
   function startNav(i) {
+    if (state.auto) { autoJump(i); return; } // 自動進行中に手順を押したら、その手順から歩き直す
+    enterView();
     state.nav = i;
     document.body.classList.add('nav-on');
     renderNav();
     syncSel(i);
     View3D.focus(i);
-    // スマホでは、立体図（上に貼り付く）とそのすぐ下の案内カードが画面に収まる位置へ
-    if (window.matchMedia && matchMedia('(max-width: 960px)').matches) {
-      window.scrollTo({ top: document.querySelector('.main').getBoundingClientRect().top + window.scrollY, behavior: 'auto' }); // 立体図が貼り付く前の位置（.main の先頭）
-    }
+    scrollToStage();
   }
   // 最初からか続きからかを、ボタンの文字と「手順 N から再開します・最初からにする」で示す（2026-10-08 利用者「最初から案内するのか、途中から再開するのか判断できるようにしてほしい」）
   function syncResume() {
     var r = View3D.resumeStep, box = $('resume'), a = $('auto-walk'), b = $('nav-start');
     if (!box || !a || !b) return;
     var cont = r > 0 && state.g && state.g.steps[r];
-    if (a.getAttribute('aria-pressed') !== 'true') {
-      a.textContent = cont ? '▶ 続きから歩く' : '▶ 自動で歩く';
-      a.title = cont ? '止めた所から自動で歩く' : '経路全体を自動で歩いて見せる（リアル視点のときは目の高さで）';
-    }
-    b.textContent = cont ? '▶ 続きから案内' : '▶ 案内をはじめる';
+    a.textContent = cont ? '▶ 続きから（自動進行）' : '▶ 案内開始（自動進行）';
+    b.textContent = cont ? '▶ 続きから（手動進行）' : '▶ 案内開始（手動進行）';
     box.hidden = !cont;
     if (cont) {
       box.innerHTML = '<span>手順 <b>' + (r + 1) + '</b>「' + esc(state.g.steps[r].title) + '」から再開します</span><button type="button" id="restart">最初からにする</button>';
@@ -3460,7 +3514,9 @@ var View3D = (function () {
     }
   }
   function stopNav() {
+    if (state.auto) { endAutoNav(); return; }
     View3D.setResumeStep(state.nav); // 閉じた手順から再開できるように（最後の手順なら最初から）
+    leaveView();
     state.nav = -1;
     document.body.classList.remove('nav-on');
     $('navbox').innerHTML = '';
@@ -3470,7 +3526,8 @@ var View3D = (function () {
   }
   function moveNav(d) {
     var n = state.g.steps.length, i = Math.max(0, Math.min(n - 1, state.nav + d));
-    if (i !== state.nav) startNav(i);
+    if (i === state.nav) return;
+    if (state.auto) autoJump(i); else startNav(i);
   }
   function syncSel(i) {
     document.querySelectorAll('ol.steps li').forEach(function (l) { l.classList.toggle('on', +l.dataset.i === i); });
@@ -3492,7 +3549,9 @@ var View3D = (function () {
         // 最後の手順では「到着・案内を終了」で終える（前は押せない「到着」で、終わり方が無かった）
         (i === n - 1 ? '<button type="button" class="primary" data-nav="stop">到着・案内を終了</button></div>'
           : '<button type="button" class="primary" data-nav="next">つぎへ ▶</button></div>') +
-      '<div class="navkeys">キーボードの ← → でも進めます</div>' +
+      // 自動進行は、止める・再開のボタンを添える（ほかは手動と同じカード）
+      (state.auto ? '<div class="navkeys navauto">' + (i === n - 1 ? '到着しました' : '自動で進んでいます <button type="button" data-nav="pause">' + (state.playing ? '■ 止める' : '▶ 再開') + '</button>') + '</div>'
+        : '<div class="navkeys">キーボードの ← → でも進めます</div>') +
       '<div class="navmain">' + stepIcon(s) + '<div class="navtx"><b>' + esc(s.title) + '</b>' +
         (sub ? '<small>' + esc(sub) + '</small>' : '') + (s.note ? '<small>' + esc(s.note) + '</small>' : '') + (s.where ? '<span class="where">' + esc(s.where) + '</span>' : '') + '</div></div>' +
       illust(s) +
@@ -3501,13 +3560,11 @@ var View3D = (function () {
     $('navbox').querySelectorAll('[data-nav]').forEach(function (b) {
       b.addEventListener('click', function () {
         var a = b.dataset.nav;
-        if (a === 'stop') stopNav(); else moveNav(a === 'next' ? 1 : -1);
+        if (a === 'stop') stopNav(); else if (a === 'pause') View3D.view('play'); else moveNav(a === 'next' ? 1 : -1);
       });
     });
   }
-  function endAuto() { View3D.endPlay(); syncResume(); }
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && state.g && state.nav < 0 && $('auto-walk') && $('auto-walk').getAttribute('aria-pressed') === 'true') { endAuto(); return; }
     if (!state.g || state.nav < 0 || /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName)) return;
     if (e.key === 'ArrowRight') { e.preventDefault(); moveNav(1); }
     else if (e.key === 'ArrowLeft') { e.preventDefault(); moveNav(-1); }
@@ -3583,22 +3640,22 @@ var View3D = (function () {
   function bindHover() {
     var lis = document.querySelectorAll('ol.steps li'), gs = document.querySelectorAll('.seg-g');
     // 「自動で歩く」の再生中は、ボタンを「■ 止める」にする（もう一度押すと止まる）。止まったら、続きがあるかを出し直す
+    // 自動進行の止める・再開: カードのボタンの文字を替える（立体図をドラッグしても止まる）
     View3D.onPlay = function (on) {
-      var b = $('auto-walk'); if (!b) return;
-      b.setAttribute('aria-pressed', on);
-      if (on) {
-        b.textContent = '■ 止める'; b.title = '自動で歩くのを止める（止めた所から続きを再開できます）';
-        // 自動で歩いているあいだは「案内を終了」も出す（止めるは一時停止。2026-10-09 利用者「自動案内中の終了にも対応してね」）
-        var box = $('resume');
-        if (box) {
-          box.hidden = false;
-          box.innerHTML = '<span>自動で歩いています</span><button type="button" id="end-auto" title="自動で歩くのを終える（Esc キー）">✕ 案内を終了</button>';
-          $('end-auto').addEventListener('click', endAuto);
-        }
-      }
-      else syncResume();
+      state.playing = on;
+      var b = document.querySelector('#navbox [data-nav="pause"]');
+      if (b) b.textContent = on ? '■ 止める' : '▶ 再開';
+      if (!on && !state.auto) syncResume();
     };
+    // 自動進行で歩いている手順が替わったら、案内カードも替える。歩き終えたら（-1）到着のカード
     View3D.onStep = function (i) {
+      if (state.auto) {
+        var n = state.g.steps.length, k = i < 0 ? n - 1 : i;
+        if (k !== state.nav || i < 0) { state.nav = k; renderNav(); }
+        listSel(k);
+        View3D.highlight(i);
+        return;
+      }
       lis.forEach(function (l) { l.classList.toggle('on', +l.dataset.i === i); });
       gs.forEach(function (gg) { gg.classList.toggle('on', +gg.dataset.i === i); });
       View3D.highlight(i);
