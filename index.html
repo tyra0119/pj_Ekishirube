@@ -979,8 +979,18 @@ var View3D = (function () {
       geo.computeVertexNormals();
       // 半透明にして地下の経路を隠さない。輪郭線は控えめに（濃さは applyOpacity で街並みの濃さに合わせる）
       var m = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true, transparent: true, opacity: 0.5, side: THREE.DoubleSide, depthWrite: false }));
+      // 下描き: 色は塗らず、建物のいちばん手前の面の奥行きだけ覚える（m の子なので、m を隠せば一緒に隠れる）。建物の面は、その奥行きと
+      // 同じ所だけ塗る。建物はぜんぶ 1 つの形なので、前後を比べずに描くと、濃くするほど奥の壁が手前の壁の上に描かれ、100% では崩れて
+      // 見えていた（2026-10-10 利用者「街並みの『街並みの濃さ』の不具合を直して。100％対応」）。地下の通路網・構内図・地下街より後に
+      // 描くので（renderOrder 8・9）、それらは隠さない
+      // 奥行きは少し奥にずらす（同じ所にある面と輪郭の線が、覚えた奥行きに負けて描かれないことがあった）
+      var pre = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ colorWrite: false, depthWrite: true, transparent: true, side: THREE.DoubleSide,
+        polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 4 }));
+      pre.renderOrder = 8; m.add(pre);
+      m.renderOrder = 9;
       m.userData.city = 'fill'; netMeshes.push(m); scene.add(m);
       var edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo, 30), new THREE.LineBasicMaterial({ color: css('--bldg'), transparent: true, opacity: 0.45, depthWrite: false }));
+      edges.renderOrder = 9; // 下描きより後（建物の陰になる輪郭は描かない）
       edges.userData.city = 'edge'; netMeshes.push(edges); scene.add(edges);
       // 代表的な建物の名前（目印）。画面に重ねる札で、画面の外の建物は端に向きの矢印つきで出す（placeNames）
       (city.n || []).forEach(function (n) {
@@ -2120,9 +2130,9 @@ var View3D = (function () {
     var coneGeo = new THREE.ConeGeometry(radius * 2.4, radius * 5.5, 20); coneGeo.translate(0, radius * 2.2, 0);
     var cone = new THREE.Mesh(coneGeo, new THREE.MeshBasicMaterial({ color: color, transparent: true }));
     cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
-    cone.position.copy(end); cone.renderOrder = 11;
+    cone.position.copy(end); cone.renderOrder = 12; // 円柱（11）が奥行きを消した後に描く（建物の下描きに隠れないように）
     var ball = new THREE.Mesh(new THREE.SphereGeometry(radius * 1.8, 16, 12), new THREE.MeshBasicMaterial({ color: color, transparent: true }));
-    ball.position.copy(sp[0]); ball.renderOrder = 11;
+    ball.position.copy(sp[0]); ball.renderOrder = 12;
     [cone, ball].forEach(function (m) {
       m.frustumCulled = false;
       m.onBeforeRender = function (r, sc, cam) { var wp = m.getWorldPosition(new THREE.Vector3()); m.scale.setScalar(Math.max(0.01, cam.position.distanceTo(wp) * pxWorld(cam) / radius)); };
@@ -2590,7 +2600,8 @@ var View3D = (function () {
       var u = m.userData, b;
       var photo = photoCity && photoState.ready;
       if (u.city === 'road') b = photo ? 0 : Math.min(1, 0.35 + cityAlpha * 2.2); // 写真の街並みでは、道路は地面の写真に写っている
-      else if (u.city === 'fill') b = photo ? 0 : Math.min(0.92, cityAlpha * 2.6);
+      // 建物の面: 初めの 35% で 0.91 まで（前と同じ）、そこから 100% で不透明（前は 0.92 で止まっていた）
+      else if (u.city === 'fill') b = photo ? 0 : cityAlpha <= 0.35 ? cityAlpha * 2.6 : Math.min(1, 0.91 + (cityAlpha - 0.35) / 0.65 * 0.09);
       else if (u.city === 'edge') b = photo ? 0 : cityAlpha * 0.9;
       else if (u.city === 'photo') b = alphaCurve(0.6); // 写真の建物: 初めの 15% で 0.6
       else if (u.city === 'photoground') b = u.loaded ? alphaCurve(0.58) : 0;
