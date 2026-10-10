@@ -1158,19 +1158,20 @@ var View3D = (function () {
   // 地下街の面の色（Machiawase と同じ。2026-10-11）。1 色だと横から見たときに立体に見えなかった。床は濃いめ（深い所ほど暗く）で、
   // 約 2 m 角の市松の明暗を描く（ubldFloorTiles。描くときに位置から決める。2026-10-11 利用者「床のタイル、もっと小さくしてほしい」で 5 m → 2 m）。壁は向きで明るさを変える（南西寄りを向く面が明るく、反対は暗く）
   var UBLD_FLOOR = new THREE.Color(0x7f90b2), UBLD_FLOOR_DARK = new THREE.Color(0x5d6f96), UBLD_STEP = new THREE.Color(0x9fadc8), UBLD_CEIL = new THREE.Color(0xb9c6dc),
-    UBLD_WALL_DARK = new THREE.Color(0x64728f), UBLD_WALL_LIGHT = new THREE.Color(0xf0f3f8), UBLD_STEP_DARK = new THREE.Color(0x7d8cab);
-  // 階段の段は 1 段ごとに明るい段・暗い段を交互に、壁は約 2 m ごとに少し明るさを変えた帯（ufloor = 3）を描く。1 色だと段や壁の
-  // 長さが分かりにくかった（2026-10-11 利用者「リアル視点の階段について、一色だと分かりにくいね。明暗付けられる？壁も一色だと分かりにくい時がある」）
+    UBLD_WALL_DARK = new THREE.Color(0x64728f), UBLD_WALL_LIGHT = new THREE.Color(0xf0f3f8);
+  // 壁（ufloor = 3）には約 50 cm 角の細い線の網目を薄く描く。階段の段は、地下街にない所に描く段（stairGeo）だけ段のへりに細い暗い線
+  // （2026-10-11 利用者「リアル視点の階段について、一色だと分かりにくいね。明暗付けられる？壁も一色だと分かりにくい時がある」→「階段はシミみたいに
+  // なって、見辛くなった。壁もちょっとみづらい。壁はさらに小さなメッシュを薄く表示する感じにしてみて」。1 段ごとの交互の色と 2 m ごとの帯はやめた）
   // 天井（CeilingSurface・RoofSurface。ufloor = 2）は、外から見る立体図では描かない（中が見えるように）。リアル視点では描く
   // （天井が無いと上の街や空が見える）（2026-10-11 利用者「地下街の天井表示は不要」）
   function ubldFloorTiles(mat) {
     mat.userData.hideCeil = { value: 1 };
     mat.onBeforeCompile = function (sh) {
       sh.uniforms.uHideCeil = mat.userData.hideCeil;
-      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float ufloor;\nvarying float vFloor;\nvarying vec2 vFloorXZ;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFloor = ufloor; vFloorXZ = (modelMatrix * vec4(position, 1.0)).xz;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFloor;\nvarying vec2 vFloorXZ;\nuniform float uHideCeil;')
-        .replace('#include <color_fragment>', '#include <color_fragment>\nif (vFloor > 2.5) { vec2 qw = floor(vFloorXZ / 2.0); diffuseColor.rgb *= mod(qw.x + qw.y, 2.0) < 0.5 ? 0.93 : 1.03; }\nelse if (vFloor > 1.5) { if (uHideCeil > 0.5) discard; }\nelse if (vFloor > 0.5) { vec2 q = floor(vFloorXZ / 2.0); diffuseColor.rgb *= mod(q.x + q.y, 2.0) < 0.5 ? 0.86 : 1.08; }');
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float ufloor;\nvarying float vFloor;\nvarying vec2 vFloorXZ;\nvarying vec3 vWPos;\nvarying vec3 vWN;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFloor = ufloor; vWPos = (modelMatrix * vec4(position, 1.0)).xyz; vFloorXZ = vWPos.xz; vWN = normalize(mat3(modelMatrix) * normal);');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFloor;\nvarying vec2 vFloorXZ;\nvarying vec3 vWPos;\nvarying vec3 vWN;\nuniform float uHideCeil;')
+        .replace('#include <color_fragment>', '#include <color_fragment>\nif (vFloor > 2.5) { vec2 gw = vec2(abs(vWN.z) > abs(vWN.x) ? vWPos.x : vWPos.z, vWPos.y) / 0.5; vec2 fw = abs(fract(gw) - 0.5); diffuseColor.rgb *= 1.0 - 0.045 * step(0.48, max(fw.x, fw.y)); }\nelse if (vFloor > 1.5) { if (uHideCeil > 0.5) discard; }\nelse if (vFloor > 0.5) { vec2 q = floor(vFloorXZ / 2.0); diffuseColor.rgb *= mod(q.x + q.y, 2.0) < 0.5 ? 0.86 : 1.08; }');
     };
     mat.customProgramCacheKey = function () { return 'ubldFloorTiles'; };
   }
@@ -1183,20 +1184,7 @@ var View3D = (function () {
     if (!fl) { fl = new THREE.BufferAttribute(new Float32Array(p.count), 1); g.setAttribute('ufloor', fl); }
     var a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), cc = new THREE.Color();
     var lx = -0.6, lz = 0.8; // 壁を明るくする向き（水平。立体図の光とおおよそ同じ）
-    // 階段の段（部品の種類のある上向きの水平な面）の高さを数え、1 段ごとに明るい・暗いを交互にする
-    var stepH = {}, ty0, kk;
     for (var t = 0; t + 2 < cnt; t += 3) {
-      var j0 = idx ? idx.getX(t) : t, j1 = idx ? idx.getX(t + 1) : t + 1, j2 = idx ? idx.getX(t + 2) : t + 2;
-      ty0 = ft && bid ? ft[bid.getX(j0)] : '';
-      if (!ty0 || ty0 === 'uro:CeilingSurface' || ty0 === 'uro:RoofSurface' || ty0 === 'uro:FloorSurface' || ty0 === 'uro:GroundSurface') continue;
-      a.fromBufferAttribute(p, j0); b.fromBufferAttribute(p, j1); c.fromBufferAttribute(p, j2);
-      e1.subVectors(b, a); e2.subVectors(c, a); e1.cross(e2);
-      if (e1.length() < 1e-9 || e1.y / e1.length() <= 0.7) continue;
-      stepH[Math.round((oy ? oy[j0] : a.y) * 50)] = 1; // 2 cm 単位
-    }
-    var hs = Object.keys(stepH).map(Number).sort(function (x, y) { return x - y; }), hIdx = {};
-    hs.forEach(function (v, n) { hIdx[v] = n; });
-    for (t = 0; t + 2 < cnt; t += 3) {
       var i0 = idx ? idx.getX(t) : t, i1 = idx ? idx.getX(t + 1) : t + 1, i2 = idx ? idx.getX(t + 2) : t + 2;
       a.fromBufferAttribute(p, i0); b.fromBufferAttribute(p, i1); c.fromBufferAttribute(p, i2);
       e1.subVectors(b, a); e2.subVectors(c, a); e1.cross(e2);
@@ -1209,10 +1197,7 @@ var View3D = (function () {
         cc.copy(UBLD_FLOOR).lerp(UBLD_FLOOR_DARK, kd);
         if (e1.y > 0) { fl.setX(i0, 1); fl.setX(i1, 1); fl.setX(i2, 1); }
       }
-      else if (Math.abs(e1.y) > 0.7) { // 設備（階段など）の水平な面。部品の種類の無い箱（LOD1）は上の面を床に
-        kk = ty && e1.y > 0 ? hIdx[Math.round((oy ? oy[i0] : a.y) * 50)] : null;
-        cc.copy(ty || e1.y < 0 ? (kk != null && kk % 2 ? UBLD_STEP_DARK : UBLD_STEP) : UBLD_FLOOR);
-      }
+      else if (Math.abs(e1.y) > 0.7) cc.copy(ty || e1.y < 0 ? UBLD_STEP : UBLD_FLOOR); // 設備（階段など）の水平な面。部品の種類の無い箱（LOD1）は上の面を床に
       else {
         var h = Math.hypot(e1.x, e1.z) || 1, k = 0.5 + 0.5 * (e1.x * lx + e1.z * lz) / h;
         cc.copy(UBLD_WALL_DARK).lerp(UBLD_WALL_LIGHT, k);
@@ -1899,7 +1884,7 @@ var View3D = (function () {
   var vertSegs = [], shaftSegs = [], vertObjs = [], fpvStairs = null, flatSegs = [];
   // リアル視点の階段・エスカレーター: 地下街のモデルに無いもの（ホームへ下りる階段など）を、段（踏み面と蹴上げ）と両側の高さ 0.9 m の
   // 壁で描く（2026-10-09 利用者「リアル視点の D2〜1番線、標準、11 の階段が、階段に見えない」。通路網の線をリアル視点で消したので、何も描かれていなかった）
-  function stairGeo(sg, tread, riser, wall, tread2) { // tread2: あれば 1 段おきにこちら（明暗を交互に）
+  function stairGeo(sg, tread, riser, wall, nose) { // nose: あれば段のへりに細い線（幅 6 cm）
     var a = sg[0], b = sg[1], top = a.y >= b.y ? a : b, bot = top === a ? b : a;
     var dx = bot.x - top.x, dz = bot.z - top.z, h = Math.hypot(dx, dz), dy = top.y - bot.y;
     if (h < 0.3 || dy < 0.3) return;
@@ -1909,7 +1894,11 @@ var View3D = (function () {
       var t0 = i / n, t1 = (i + 1) / n, y0 = top.y - dy * i / n, y1 = top.y - dy * (i + 1) / n;
       var x0 = top.x + dx * t0, z0 = top.z + dz * t0, x1 = top.x + dx * t1, z1 = top.z + dz * t1;
       q(riser, [x0 + sx * W, y0, z0 + sz * W], [x0 - sx * W, y0, z0 - sz * W], [x0 - sx * W, y1, z0 - sz * W], [x0 + sx * W, y1, z0 + sz * W]);
-      q(tread2 && i % 2 ? tread2 : tread, [x0 + sx * W, y1, z0 + sz * W], [x0 - sx * W, y1, z0 - sz * W], [x1 - sx * W, y1, z1 - sz * W], [x1 + sx * W, y1, z1 + sz * W]);
+      q(tread, [x0 + sx * W, y1, z0 + sz * W], [x0 - sx * W, y1, z0 - sz * W], [x1 - sx * W, y1, z1 - sz * W], [x1 + sx * W, y1, z1 + sz * W]);
+      if (nose && i + 1 < n) { // 次の段へ下りるへり（この段の下の端）に、上から見える細い線
+        var xn = x1 - dx / h * 0.06, zn = z1 - dz / h * 0.06, yn = y1 + 0.006;
+        q(nose, [xn + sx * W, yn, zn + sz * W], [xn - sx * W, yn, zn - sz * W], [x1 - sx * W, yn, z1 - sz * W], [x1 + sx * W, yn, z1 + sz * W]);
+      }
     }
     if (!sg[3]) return; // 両側の壁は経路が通る階段だけ（ほかの階段の壁が斜めの板として視界を横切っていた）
     [1, -1].forEach(function (k) { // 両側の壁（段の上 0.9 m まで）
@@ -1927,11 +1916,11 @@ var View3D = (function () {
     vertObjs = [];
     var cMuted = css('--muted'), vert = {}, vertR = {};
     if (fpvStairs) { scene.remove(fpvStairs); fpvStairs = null; }
-    var tread = [], tread2 = [], riser = [], wall = [];
+    var tread = [], nose = [], riser = [], wall = [];
     vertSegs.forEach(function (sg) {
       var a = sg[0], b = sg[1];
       if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }))) return;
-      stairGeo(sg, tread, riser, wall, tread2);
+      stairGeo(sg, tread, riser, wall, nose);
       // 外から見るときも、斜めの帯ではなく段のある形（踏み面と蹴上げ）で描く（2026-10-09 利用者「構内図の階段、エスカレータについて、
       // 斜め線ではなく、段がある絵にできる？」）。高さの差が小さく段が作れないものは前の帯のまま
       var arr = vert[sg[2]] = vert[sg[2]] || [], n0 = arr.length, rs = vertR[sg[2]] = vertR[sg[2]] || [];
@@ -1956,8 +1945,8 @@ var View3D = (function () {
     });
     var fg = new THREE.Group();
     // 色は地下街のモデルと同じ（段の上は地下街の階段、蹴上げと壁は地下街の壁、床の板は地下街の床。2026-10-11 構内図と地下街を区別しない）
-    // 段は 1 段おきに明暗（tread・tread2）、両側の壁は約 2 m ごとの帯、床の板は床と同じ市松（ufloor。地下街と同じ描き方）
-    [[tread, UBLD_STEP, 0], [tread2, UBLD_STEP_DARK, 0], [riser, UBLD_WALL_DARK, 0], [wall, UBLD_WALL_LIGHT, 3], [floor, UBLD_FLOOR, 1]].forEach(function (d) {
+    // 段のへりは細い暗い線、両側の壁は細い網目、床の板は床と同じ市松（ufloor。地下街と同じ描き方）
+    [[tread, UBLD_STEP, 0], [nose, UBLD_WALL_DARK, 0], [riser, UBLD_WALL_DARK, 0], [wall, UBLD_WALL_LIGHT, 3], [floor, UBLD_FLOOR, 1]].forEach(function (d) {
       if (!d[0].length) return;
       var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(d[0], 3)); geo.computeVertexNormals();
       geo.setAttribute('ufloor', new THREE.Float32BufferAttribute(new Float32Array(d[0].length / 3).fill(d[2]), 1));
