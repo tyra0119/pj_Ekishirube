@@ -1154,12 +1154,16 @@ var View3D = (function () {
   // 約 5 m 角の市松の明暗を描く（ubldFloorTiles。描くときに位置から決める）。壁は向きで明るさを変える（南西寄りを向く面が明るく、反対は暗く）
   var UBLD_FLOOR = new THREE.Color(0x7f90b2), UBLD_FLOOR_DARK = new THREE.Color(0x5d6f96), UBLD_STEP = new THREE.Color(0x9fadc8), UBLD_CEIL = new THREE.Color(0xb9c6dc),
     UBLD_WALL_DARK = new THREE.Color(0x64728f), UBLD_WALL_LIGHT = new THREE.Color(0xf0f3f8);
+  // 天井（CeilingSurface・RoofSurface。ufloor = 2）は、外から見る立体図では描かない（中が見えるように）。リアル視点では描く
+  // （天井が無いと上の街や空が見える）（2026-10-11 利用者「地下街の天井表示は不要」）
   function ubldFloorTiles(mat) {
+    mat.userData.hideCeil = { value: 1 };
     mat.onBeforeCompile = function (sh) {
+      sh.uniforms.uHideCeil = mat.userData.hideCeil;
       sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float ufloor;\nvarying float vFloor;\nvarying vec2 vFloorXZ;')
         .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFloor = ufloor; vFloorXZ = (modelMatrix * vec4(position, 1.0)).xz;');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFloor;\nvarying vec2 vFloorXZ;')
-        .replace('#include <color_fragment>', '#include <color_fragment>\nif (vFloor > 0.5) { vec2 q = floor(vFloorXZ / 5.0); diffuseColor.rgb *= mod(q.x + q.y, 2.0) < 0.5 ? 0.86 : 1.08; }');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFloor;\nvarying vec2 vFloorXZ;\nuniform float uHideCeil;')
+        .replace('#include <color_fragment>', '#include <color_fragment>\nif (vFloor > 1.5) { if (uHideCeil > 0.5) discard; }\nelse if (vFloor > 0.5) { vec2 q = floor(vFloorXZ / 5.0); diffuseColor.rgb *= mod(q.x + q.y, 2.0) < 0.5 ? 0.86 : 1.08; }');
     };
     mat.customProgramCacheKey = function () { return 'ubldFloorTiles'; };
   }
@@ -1168,7 +1172,7 @@ var View3D = (function () {
     var ft = o.userData.ftype, oy = o.userData.origY, bid = g.attributes._batchid || g.attributes._feature_id_0;
     var col = g.attributes.color;
     if (!col) { col = new THREE.BufferAttribute(new Float32Array(p.count * 3), 3); g.setAttribute('color', col); }
-    var fl = g.attributes.ufloor; // 1: 床（市松の明暗を描く）
+    var fl = g.attributes.ufloor; // 1: 床（市松の明暗を描く） 2: 天井（外から見るときは描かない）
     if (!fl) { fl = new THREE.BufferAttribute(new Float32Array(p.count), 1); g.setAttribute('ufloor', fl); }
     var a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), cc = new THREE.Color();
     var lx = -0.6, lz = 0.8; // 壁を明るくする向き（水平。立体図の光とおおよそ同じ）
@@ -1179,7 +1183,7 @@ var View3D = (function () {
       var L = e1.length(); if (L < 1e-9) continue;
       e1.divideScalar(L);
       var ty = ft && bid ? ft[bid.getX(i0)] : '';
-      if (ty === 'uro:CeilingSurface' || ty === 'uro:RoofSurface') cc.copy(UBLD_CEIL);
+      if (ty === 'uro:CeilingSurface' || ty === 'uro:RoofSurface') { cc.copy(UBLD_CEIL); fl.setX(i0, 2); fl.setX(i1, 2); fl.setX(i2, 2); }
       else if (ty === 'uro:FloorSurface' || ty === 'uro:GroundSurface') {
         var kd = oy && ground != null ? Math.min(1, Math.max(0, (ground - oy[i0] - 5) / 8)) : 0; // 地下 5 m から 13 m で 0〜1
         cc.copy(UBLD_FLOOR).lerp(UBLD_FLOOR_DARK, kd);
@@ -2673,6 +2677,7 @@ var View3D = (function () {
       if (fpv && u.space) b = u.outline ? 0 : 1;
       if (fpv && u.net) b = 0;
       // 地下街: リアル視点か濃さ 100% なら不透明な壁・床・天井として描く（奥が透けない）
+      if (u.city === 'ubld' && m.material.userData.hideCeil) m.material.userData.hideCeil.value = fpv ? 0 : 1; // 天井はリアル視点だけ
       if (u.city === 'ubld') { var uo = b >= 0.999; if (u.fpvMat !== uo) { m.material.transparent = !uo; m.material.depthWrite = uo; m.material.needsUpdate = true; u.fpvMat = uo; } }
       m.material.opacity = b;
       m.visible = b > 0.003;
@@ -3132,12 +3137,12 @@ var View3D = (function () {
               '<button type="button" data-view="oblique">斜めから</button><button type="button" data-view="side">横から</button><button type="button" data-view="top">真上から</button>' +
               (View3D.hasCity ? '<button type="button" id="city-toggle" aria-pressed="' + View3D.city + '">街並み ' + (View3D.city ? '表示中' : '非表示') + '</button>' : '') +
               (View3D.hasPhoto ? '<button type="button" id="photo-toggle" aria-pressed="' + View3D.photoCity + '" title="PLATEAU の写真付きの建物と、航空写真の地面に切り替える（データが多いので通信に注意）"' + (View3D.city ? '' : ' hidden') + '>写真の街並み</button>' : '') +
-              (View3D.hasUbld(st) ? '<button type="button" id="ubld-toggle" aria-pressed="' + View3D.ubld + '" title="PLATEAU の地下街モデル（壁・床・天井）を重ねる。深さは通路網の階に合わせて伸ばしている">地下街</button>' : '') +
+              (View3D.hasUbld(st) ? '<button type="button" id="ubld-toggle" aria-pressed="' + View3D.ubld + '" title="PLATEAU の地下街モデル（壁・床。天井はリアル視点だけ）を重ねる。深さは通路網の階に合わせて伸ばしている">地下街</button>' : '') +
               (View3D.canFpv(st) ? '<button type="button" id="fpv-toggle" aria-pressed="' + View3D.fpv + '" title="地下街の中を人の目の高さで歩いて見る。床の↑と壁の案内板で進む向きを示す">リアル視点</button>' : '') +
             '</div><div class="knobs">' +
             (View3D.hasCity ? '<label class="depth" for="city-a" id="city-a-wrap"' + (View3D.city ? '' : ' hidden') + '>街並みの濃さ<input type="range" id="city-a" min="0" max="1" step="0.05" value="' + View3D.cityAlpha + '"><output id="city-a-v">' + Math.round(View3D.cityAlpha * 100) + '%</output></label>' : '') +
             // 地下街の濃さ（2026-10-11 利用者「地下街の透明度設定、明暗について、エキしらべにも反映してほしい」）。地下街を出しているときだけ
-            (View3D.hasUbld(st) ? '<label class="depth" for="ubld-a" id="ubld-a-wrap"' + (View3D.ubld ? '' : ' hidden') + ' title="PLATEAU の地下街モデルの壁・床・天井の濃さ。案内中はこの半分ほど。リアル視点ではいつも不透明">地下街の濃さ<input type="range" id="ubld-a" min="0" max="1" step="0.05" value="' + View3D.ubldAlpha + '"><output id="ubld-a-v">' + Math.round(View3D.ubldAlpha * 100) + '%</output></label>' : '') +
+            (View3D.hasUbld(st) ? '<label class="depth" for="ubld-a" id="ubld-a-wrap"' + (View3D.ubld ? '' : ' hidden') + ' title="PLATEAU の地下街モデルの壁・床の濃さ。案内中はこの半分ほど。リアル視点ではいつも不透明">地下街の濃さ<input type="range" id="ubld-a" min="0" max="1" step="0.05" value="' + View3D.ubldAlpha + '"><output id="ubld-a-v">' + Math.round(View3D.ubldAlpha * 100) + '%</output></label>' : '') +
             '</div></div></section>' +
       '<div class="figs2">' +
           '<section class="panel" aria-labelledby="h-plat"><h2 id="h-plat">ホームのどこか</h2><p class="hint">電車の向きと、使う昇降設備の位置です。</p><div class="svgbox">' + platformSVG(g) + '</div></section>' +
