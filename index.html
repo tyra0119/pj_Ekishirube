@@ -1931,7 +1931,8 @@ var View3D = (function () {
       floor.push(ax + px, y0, az + pz, ax - px, y0, az - pz, bx - px, y1, bz - pz, ax + px, y0, az + pz, bx - px, y1, bz - pz, bx + px, y1, bz + pz);
     });
     var fg = new THREE.Group();
-    [[tread, '#d5dae2'], [riser, '#a7afbc'], [wall, '#c3cad5'], [floor, '#d9dde4']].forEach(function (d) {
+    // 色は地下街のモデルと同じ（段の上は地下街の階段、蹴上げと壁は地下街の壁、床の板は地下街の床。2026-10-11 構内図と地下街を区別しない）
+    [[tread, UBLD_STEP], [riser, UBLD_WALL_DARK], [wall, UBLD_WALL_LIGHT], [floor, UBLD_FLOOR]].forEach(function (d) {
       if (!d[0].length) return;
       var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(d[0], 3)); geo.computeVertexNormals();
       fg.add(new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ color: d[1], side: THREE.DoubleSide })));
@@ -2006,9 +2007,6 @@ var View3D = (function () {
     });
   }
   function addSpaces(list) {
-    var cWalk = css('--walk'), cMuted = css('--muted'), cSel = css('--sel');
-    // 通路網の線の代わりに床の形で見せるので、通路は少し濃く（2026-10-09。前は 0.13）
-    var STYLE = { w: [cWalk, 0.24], wt: [cSel, 0.22], s: [cMuted, 0.38], e: [cMuted, 0.38], v: [cMuted, 0.45], r: [cMuted, 0.3], t: [cSel, 0.32] };
     var fills = {}, lines = {};
     list.forEach(function (sp) {
       var lv = sp[0], kind = sp[1] === 'w' && sp[2] ? 'wt' : sp[1], y = levelY(lv) - 0.35, key = lv + '|' + kind;
@@ -2035,16 +2033,24 @@ var View3D = (function () {
       var ln = lines[lv] = lines[lv] || [];
       rings.forEach(function (r) { r.forEach(function (p, i) { var q = r[(i + 1) % r.length]; ln.push(p.x, y + 0.02, -p.y, q.x, y + 0.02, -q.y); }); });
     });
+    // 構内図の床は、地下街の床と同じ材質・色にする（区別しない）: 床は地下街の床の色（深い階ほど暗く）と約 5 m 角の市松の明暗、
+    // 階段・エスカレーター・エレベーターの範囲は地下街の階段の色。改札内・トイレの部屋も同じ床の色。濃さは地下街と同じつまみ（applyOpacity）
+    // （2026-10-11 利用者「駅構内図と地下街の床を同じにしたい。要は、駅構内図と地下街は区別したくない」）
     Object.keys(fills).forEach(function (key) {
-      var lv = Number(key.split('|')[0]), s = STYLE[key.split('|')[1]];
-      var m = ribbonMesh(fills[key], s[0], s[1]);
-      m.renderOrder = -1; m.userData.base = s[1]; m.userData.lv = [lv, lv]; m.userData.space = true; netMeshes.push(m); scene.add(m); spaceObjs.push(m);
-      var kd = key.split('|')[1];
-      m.userData.color = s[0]; m.userData.fpvColor = kd === 'wt' ? '#cbd6ea' : kd === 'w' || kd === 't' ? '#d9dde4' : '#b9c0cb'; // リアル視点の不透明な床の色
+      var lv = Number(key.split('|')[0]), kd = key.split('|')[1], floor = kd === 'w' || kd === 'wt' || kd === 't' || kd === 'r';
+      var col = floor ? UBLD_FLOOR.clone().lerp(UBLD_FLOOR_DARK, Math.min(1, Math.max(0, (-lv * 5 - 5) / 8))) : UBLD_STEP.clone(); // 1 階分を約 5 m とみて、地下街と同じく地下 5〜13 m で暗く
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute('position', new THREE.Float32BufferAttribute(fills[key], 3));
+      geo.setAttribute('ufloor', new THREE.Float32BufferAttribute(new Float32Array(fills[key].length / 3).fill(floor ? 1 : 0), 1));
+      geo.computeVertexNormals();
+      var mat = new THREE.MeshLambertMaterial({ color: col, transparent: true, opacity: ubldAlpha, side: THREE.DoubleSide, depthWrite: false });
+      ubldFloorTiles(mat);
+      var m = new THREE.Mesh(geo, mat);
+      m.renderOrder = -1; m.userData.lv = [lv, lv]; m.userData.space = true; netMeshes.push(m); scene.add(m); spaceObjs.push(m);
     });
     Object.keys(lines).forEach(function (lv) {
       var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(lines[lv], 3));
-      var m = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: cMuted, transparent: true, opacity: 0.5, depthWrite: false }));
+      var m = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: UBLD_WALL_DARK, transparent: true, opacity: 0.5, depthWrite: false }));
       m.userData.base = 0.5; m.userData.lv = [Number(lv), Number(lv)]; m.userData.space = true; m.userData.outline = true; netMeshes.push(m); scene.add(m); spaceObjs.push(m);
     });
   }
@@ -2154,11 +2160,14 @@ var View3D = (function () {
     var mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: true, depthWrite: true });
     var segs = Math.min(800, sp.length * 16), rad = 12;
     var geo = new THREE.TubeGeometry(curve, segs, radius, rad, false);
-    // 頂点ごとに、その輪の中心（線の上の点）
-    var cen = new Float32Array((segs + 1) * (rad + 1) * 3), P = new THREE.Vector3();
+    // 頂点ごとに、その輪の中心。輪の頂点の平均で求める（曲線の点を自分で取ると、TubeGeometry の点の取り方と合わず、中心が最大 140 m
+    // ずれて、カメラが近づく自動で歩くときに矢印が太い帯になったり離れた所に浮いたりしていた。2026-10-11 利用者「自動で歩くの矢印がおかしい」）
+    var pa = geo.attributes.position, cen = new Float32Array(pa.count * 3);
     for (var i = 0; i <= segs; i++) {
-      curve.getPointAt(i / segs, P);
-      for (var j = 0; j <= rad; j++) { var o = (i * (rad + 1) + j) * 3; cen[o] = P.x; cen[o + 1] = P.y; cen[o + 2] = P.z; }
+      var cx = 0, cy = 0, cz = 0;
+      for (var j = 0; j < rad; j++) { var v = i * (rad + 1) + j; cx += pa.getX(v); cy += pa.getY(v); cz += pa.getZ(v); } // 継ぎ目の重複（j = rad）は除く
+      cx /= rad; cy /= rad; cz /= rad;
+      for (j = 0; j <= rad; j++) { var o = (i * (rad + 1) + j) * 3; cen[o] = cx; cen[o + 1] = cy; cen[o + 2] = cz; }
     }
     geo.setAttribute('aCenter', new THREE.BufferAttribute(cen, 3));
     var uni = { uPix: { value: 0.01 }, uR0: { value: radius } };
@@ -2660,6 +2669,7 @@ var View3D = (function () {
       else if (u.city === 'photo') b = alphaCurve(0.6); // 写真の建物: 初めの 15% で 0.6
       else if (u.city === 'photoground') b = u.loaded ? alphaCurve(0.58) : 0;
       else if (u.city === 'ubld') b = fpv ? 1 : ubldAlpha; // 中から見るときはふつうの壁・床・天井
+      else if (u.space) b = u.outline ? Math.min(0.6, ubldAlpha * 1.5) : ubldAlpha; // 構内図も地下街と同じ濃さ（輪郭は少し濃く）
       else b = u.base;
       if (sel) {
         // いま歩いている階は濃く、ほかの階は薄く
@@ -2671,10 +2681,9 @@ var View3D = (function () {
       // リアル視点では、構内図の床は不透明な床に（地下街の床に近い明るい色。2026-10-09 利用者「リアル視点で案内中の構内図の床が半透明に
       // なってる。不透明がいいな」。前は半透明: 「地下街のように表示してほしい」）。輪郭の線と、通路網の線（GTFS-Pathways の通路・階段・
       // エレベーター）は出さない（利用者「リアル案内中の床にパスの線が見えるけど、これは非表示にできる？」）
-      if (u.space && !u.outline && u.fpvMat !== fpv) {
-        m.material.color.set(fpv ? u.fpvColor : u.color); m.material.transparent = !fpv; m.material.depthWrite = fpv; m.material.needsUpdate = true; u.fpvMat = fpv;
-      }
       if (fpv && u.space) b = u.outline ? 0 : 1;
+      // 構内図の床: リアル視点か濃さ 100% なら不透明な床として描く（地下街と同じ。色も地下街の床と同じなので替えない）
+      if (u.space && !u.outline) { var so = fpv || b >= 0.999; if (u.fpvMat !== so) { m.material.transparent = !so; m.material.depthWrite = so; m.material.needsUpdate = true; u.fpvMat = so; } }
       if (fpv && u.net) b = 0;
       // 地下街: リアル視点か濃さ 100% なら不透明な壁・床・天井として描く（奥が透けない）
       if (u.city === 'ubld' && m.material.userData.hideCeil) m.material.userData.hideCeil.value = fpv ? 0 : 1; // 天井はリアル視点だけ
@@ -3141,8 +3150,9 @@ var View3D = (function () {
               (View3D.canFpv(st) ? '<button type="button" id="fpv-toggle" aria-pressed="' + View3D.fpv + '" title="地下街の中を人の目の高さで歩いて見る。床の↑と壁の案内板で進む向きを示す">リアル視点</button>' : '') +
             '</div><div class="knobs">' +
             (View3D.hasCity ? '<label class="depth" for="city-a" id="city-a-wrap"' + (View3D.city ? '' : ' hidden') + '>街並みの濃さ<input type="range" id="city-a" min="0" max="1" step="0.05" value="' + View3D.cityAlpha + '"><output id="city-a-v">' + Math.round(View3D.cityAlpha * 100) + '%</output></label>' : '') +
-            // 地下街の濃さ（2026-10-11 利用者「地下街の透明度設定、明暗について、エキしらべにも反映してほしい」）。地下街を出しているときだけ
-            (View3D.hasUbld(st) ? '<label class="depth" for="ubld-a" id="ubld-a-wrap"' + (View3D.ubld ? '' : ' hidden') + ' title="PLATEAU の地下街モデルの壁・床の濃さ。案内中はこの半分ほど。リアル視点ではいつも不透明">地下街の濃さ<input type="range" id="ubld-a" min="0" max="1" step="0.05" value="' + View3D.ubldAlpha + '"><output id="ubld-a-v">' + Math.round(View3D.ubldAlpha * 100) + '%</output></label>' : '') +
+            // 地下街の濃さ（2026-10-11 利用者「地下街の透明度設定、明暗について、エキしらべにも反映してほしい」）。構内図の床も同じつまみで
+            // （利用者「駅構内図も透明度を変更できるようにしたい。（地下街のスライダーでどっちも変更できるようにしたい）」）。構内図のある駅はいつも出す
+            (View3D.hasUbld(st) || View3D.hasSpaces(st) ? '<label class="depth" for="ubld-a" id="ubld-a-wrap"' + (View3D.ubld || View3D.hasSpaces(st) ? '' : ' hidden') + ' title="PLATEAU の地下街モデルと、国土交通省の構内図の床の濃さ（どちらも同じ）。案内中は地下街はこの半分ほど、構内図はいまの階が濃く。リアル視点ではいつも不透明">地下街・構内図の濃さ<input type="range" id="ubld-a" min="0" max="1" step="0.05" value="' + View3D.ubldAlpha + '"><output id="ubld-a-v">' + Math.round(View3D.ubldAlpha * 100) + '%</output></label>' : '') +
             '</div></div></section>' +
       '<div class="figs2">' +
           '<section class="panel" aria-labelledby="h-plat"><h2 id="h-plat">ホームのどこか</h2><p class="hint">電車の向きと、使う昇降設備の位置です。</p><div class="svgbox">' + platformSVG(g) + '</div></section>' +
@@ -3168,7 +3178,7 @@ var View3D = (function () {
       var on = !View3D.ubld;
       View3D.setUbld(on);
       this.setAttribute('aria-pressed', on);
-      if ($('ubld-a-wrap')) $('ubld-a-wrap').hidden = !on;
+      if ($('ubld-a-wrap')) $('ubld-a-wrap').hidden = !on && !View3D.hasSpaces(state.st); // 構内図のある駅は、地下街を消してもつまみを残す
       if ($('fpv-toggle')) $('fpv-toggle').setAttribute('aria-pressed', View3D.fpv);
     });
     if ($('fpv-toggle')) $('fpv-toggle').addEventListener('click', function () {
