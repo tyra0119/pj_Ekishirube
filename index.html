@@ -1706,7 +1706,7 @@ var View3D = (function () {
         // いまの階の間隔（LV、深さのつまみで変わる）で高さを置き直す
         var p = o.geometry.attributes.position, oy = o.userData.origY;
         for (var k = 0; k < p.count; k++) p.setY(k, depthToY(oy[k] - u.ground, c.pts));
-        p.needsUpdate = true; o.geometry.computeVertexNormals(); o.geometry.computeBoundingSphere();
+        p.needsUpdate = true; o.geometry.computeVertexNormals(); o.geometry.computeBoundingSphere(); o.geometry.computeBoundingBox(); // 当たり判定（壁越しのピン）用に囲みの箱も置き直す
       });
       var sv = ubldSurvey(c.meshes);
       c.meshes.forEach(function (o) {
@@ -2602,12 +2602,28 @@ var View3D = (function () {
     d.setAttribute('aria-label', text);
     return d;
   }
+  // リアル視点で、目からピン（の場所の 1.2 上）までのあいだに壁・床・天井・階段の壁があるか（地下街のモデル・リアル視点の階段と床の板・構内図の床）
+  var occRay = new THREE.Raycaster();
+  function pinHidden(pos) {
+    var occ = [];
+    function add(o) { if (o && o.isMesh && o.visible && !o.userData.soft && !o.userData.city2) occ.push(o); }
+    if (ubldGroup && ubldGroup.visible) ubldGroup.children.forEach(function (o) { if (o.userData.origY) add(o); });
+    if (fpvStairs && fpvStairs.visible) fpvStairs.children.forEach(add);
+    spaceObjs.forEach(function (o) { if (!o.userData.outline) add(o); });
+    if (!occ.length) return false;
+    var to = pos.clone().add(new THREE.Vector3(0, 1.2, 0)), dir = to.clone().sub(camera.position), dist = dir.length();
+    if (dist < 1) return false;
+    occRay.set(camera.position, dir.divideScalar(dist)); occRay.far = dist - 0.3;
+    return occRay.intersectObjects(occ, false).length > 0;
+  }
   function placePins() {
-    var W = el.clientWidth, H = el.clientHeight, v = new THREE.Vector3();
+    var W = el.clientWidth, H = el.clientHeight, v = new THREE.Vector3(), now = performance.now();
     pinBox.classList.toggle('big', fpv); // リアル視点では大きく（2026-10-08 利用者「リアル視点で…ピンが小さく、文字が読みにくい」）
     pins.forEach(function (n) {
       v.copy(n.pos).project(camera);
-      n.el.hidden = v.z > 1;
+      // リアル視点では、壁越しには見せない（0.25 秒おきに調べる）（2026-10-11 利用者「リアル視点案内中の目的地は、壁越しに見えないようにして」）
+      if (fpv) { if (!n.occT || now - n.occT > 250) { n.occT = now; n.occ = pinHidden(n.pos); } } else n.occ = false;
+      n.el.hidden = v.z > 1 || n.occ;
       n.el.style.transform = 'translate(' + Math.round((v.x + 1) / 2 * W) + 'px,' + Math.round((1 - v.y) / 2 * H) + 'px)';
       // リアル視点で歩いているあいだは半透明（0.3）。目的地は、経路に沿った残りの道のりが 45 より短くなると濃くなり、15 以内ではっきり
       // （2026-10-08 利用者「リアル視点で移動中は、目的地は半透明にできる？到着手前ではっきり表示したい」。まっすぐの距離は、高さを強調しているので最後の手順でも遠かった）
