@@ -921,8 +921,10 @@ var View3D = (function () {
   // 構内図: 国土交通省の構内地図データ（Space）の床の形。データのある駅（12 駅）で常に表示（2026-10-08 利用者「2を進めて」で追加、
   // 2026-10-09 利用者「常時構内図表示でいいかも」でボタンをなくした。前にボタンで切った端末（ekishirube.smap = 0）でも表示）
   var showSpaces = true;
-  var showUbld = false; // 駅によってはデータが多いので選んだときだけ読み込む
-  try { showUbld = UBLD_ENABLED && localStorage.getItem('ekishirube.ubld') === '1'; } catch (e) {}
+  // 地下街: 初めから出す（地下街のある駅だけ読み込む。ボタンで切った端末＝ ekishirube.ubld = 0 は切ったまま）
+  // （2026-10-11 利用者「地下街がある駅は、デフォルトで地下街をONに、案内のリアル視点もONに」。前は選んだときだけ）
+  var showUbld = UBLD_ENABLED;
+  try { showUbld = UBLD_ENABLED && localStorage.getItem('ekishirube.ubld') !== '0'; } catch (e) {}
   var sel = null;       // いま選んでいる手順 { i, lo, hi, curve, ring }
   var ripple = null, routePts = [], lastCull = 0, compass = null, lastHeading = null, names = [], nameBox = null, pins = [], pinBox = null;
   var renderer, scene, camera, controls, el, ro, started = false;
@@ -1160,7 +1162,7 @@ var View3D = (function () {
   // 光は使わず（MeshBasicMaterial）、面の向きで明るさを決める: 水平な面 100%、縦の面は東西を向く面 82%・南北を向く面 68%（あいだはなめらかに）。
   // 踏み面（と踊り場）は木の色、壁と蹴上げは白、床はグレージュ（深い所ほど少し暗く）、段のへりは濃い線
   var UBLD_FLOOR = new THREE.Color(0xcfccc5), UBLD_FLOOR_DARK = new THREE.Color(0xaaa59c), UBLD_STEP = new THREE.Color(0xb7855a), UBLD_CEIL = new THREE.Color(0xdcd8d0),
-    UBLD_WALL = new THREE.Color(0xf3f0ea), UBLD_NOSE = new THREE.Color(0x2a2826), UBLD_TACTILE = new THREE.Color(0xe8b520), UBLD_LINE = new THREE.Color(0x1c1b19);
+    UBLD_WALL = new THREE.Color(0xf3f0ea), UBLD_NOSE = new THREE.Color(0x2a2826), UBLD_TACTILE = new THREE.Color(0xe8b520), UBLD_LINE = new THREE.Color(0x1c1b19), UBLD_CAP = new THREE.Color(0x34322f);
   // 面の種類（ufloor）: 0 その他（踏み面・蹴上げなど） 1 床（60 cm 角の目地を濃さ 12% で。遠くで細かくなりすぎる所は消す）
   // 2 天井（外から見る立体図では描かない。リアル視点では描く。2026-10-11 利用者「地下街の天井表示は不要」） 3 壁（床からの高さ uh（m）で、
   // 8 cm までは濃い巾木、その上 70 cm までを足元ほど暗く）。面の向きは画面上の位置の変化から求める（頂点を共有する面でも混ざらない）
@@ -2233,10 +2235,19 @@ var View3D = (function () {
     });
     shaftSegs.forEach(function (s) {
       if (cells && coveredBy(cells, [0.15, 0.5, 0.85].map(function (t) { return s[0].clone().lerp(s[1], t); }))) return;
-      var h = Math.abs(s[0].y - s[1].y);
-      var m = new THREE.Mesh(new THREE.BoxGeometry(2.4, h, 2.4), new THREE.MeshBasicMaterial({ color: cMuted, transparent: true, opacity: 0.28, depthWrite: false }));
-      m.position.set((s[0].x + s[1].x) / 2, (s[0].y + s[1].y) / 2, (s[0].z + s[1].z) / 2);
-      m.userData.base = 0.28; m.userData.lv = [s[2], s[3]]; m.userData.net = true; m.userData.stair = true; netMeshes.push(m); scene.add(m); vertObjs.push(m);
+      // エレベーターの柱も地下街・階段と同じ描き方（案 2d）: 側面は壁の白で面の向きの明るさ、上の面は濃い天端、輪郭線
+      // （2026-10-11 利用者「エレベータのデザインが他と合ってないね」。前は灰色の半透明の箱）
+      var h = Math.abs(s[0].y - s[1].y), geo = new THREE.BoxGeometry(2.4, h, 2.4), nrm = geo.attributes.normal, cols = [];
+      for (var k = 0; k < nrm.count; k++) { var cc = nrm.getY(k) > 0.5 ? UBLD_CAP : UBLD_WALL; cols.push(cc.r, cc.g, cc.b); }
+      geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+      geo.setAttribute('ufloor', new THREE.Float32BufferAttribute(new Float32Array(nrm.count), 1));
+      var mat = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.45, depthWrite: false });
+      ubldFloorTiles(mat);
+      var m = new THREE.Mesh(geo, mat), ln = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: UBLD_LINE, transparent: true, opacity: 0.6, depthWrite: false }));
+      [m, ln].forEach(function (o, n) {
+        o.position.set((s[0].x + s[1].x) / 2, (s[0].y + s[1].y) / 2, (s[0].z + s[1].z) / 2);
+        o.userData.base = n ? 0.6 : 0.45; o.userData.lv = [s[2], s[3]]; o.userData.net = true; o.userData.stair = true; netMeshes.push(o); scene.add(o); vertObjs.push(o);
+      });
     });
   }
   function ubldCells(grp) {
@@ -3733,7 +3744,8 @@ var View3D = (function () {
   // ---------- 案内カード（1 手順ずつ） ----------
   // 屋内では現在地が取れないので、利用者が「つぎへ」で進める（walkbavi と同じ考え方）
   // リアル視点で案内するか（「リアル視点で案内する」にチェック。この端末に覚える）。案内を始めるときにリアル視点にし、終えたら戻す
-  function fpvPref() { try { return localStorage.getItem('ekishirube.fpvOpt') === '1'; } catch (e) { return false; } }
+  // 初めはチェックあり（外した端末＝ ekishirube.fpvOpt = 0 は外したまま。2026-10-11 利用者「地下街がある駅は、デフォルトで地下街をONに、案内のリアル視点もONに」）
+  function fpvPref() { try { return localStorage.getItem('ekishirube.fpvOpt') !== '0'; } catch (e) { return true; } }
   function enterView() {
     if (!$('fpv-opt') || !$('fpv-opt').checked || !View3D.canFpv(state.st)) return;
     if (!View3D.ubld) { View3D.setUbld(true); if ($('ubld-toggle')) $('ubld-toggle').setAttribute('aria-pressed', true); if ($('ubld-a-wrap')) $('ubld-a-wrap').hidden = false; } // リアル視点には地下街が要る
