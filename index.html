@@ -1191,7 +1191,7 @@ var View3D = (function () {
   // 地下街の階段と床の下調べ（高さは元の高さ origY、m）。地下街のモデルには階段の部品の種類が無く、踏み面は床、蹴上げは壁として入っている。
   // 高さ 5〜35 cm の縦の面を蹴上げとみなす。蹴上げの頂点だけでできた水平な面は踏み面（踊り場も）。床の高さは 50 cm 角のます目ごとに持つ
   function ubldSurvey(meshes) {
-    var C = 0.5, cells = {}, treadV = {}, risers = [];
+    var C = 0.5, cells = {}, treadV = {}, risers = [], cand = [], ceil = {};
     var a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
     function vk(x, z, y) { return Math.round(x * 100) + ',' + Math.round(z * 100) + ',' + Math.round(y * 100); }
     function mark(ix, iz, y) { var k = ix + ',' + iz, r = cells[k] || (cells[k] = []); if (!r.some(function (h) { return Math.abs(h - y) < 0.02; })) r.push(y); }
@@ -1207,8 +1207,12 @@ var View3D = (function () {
         var ys = ii.map(function (i) { return oy[i]; }), top = Math.max.apply(null, ys), bot = Math.min.apply(null, ys);
         if (Math.abs(e1.y / L) > 0.7) { // 水平な面（天井を除く）: 床の高さ
           var ty = ft && bid ? ft[bid.getX(ii[0])] : '';
-          if (ty === 'uro:CeilingSurface' || ty === 'uro:RoofSurface') continue;
           var y = (ys[0] + ys[1] + ys[2]) / 3;
+          if (ty === 'uro:CeilingSurface' || ty === 'uro:RoofSurface') { // 天井の高さ（2 m 角のます目ごと）
+            var ck = Math.floor((a.x + b.x + c.x) / 6) + ',' + Math.floor((a.z + b.z + c.z) / 6), cr = ceil[ck] || (ceil[ck] = []);
+            if (!cr.some(function (h) { return Math.abs(h - y) < 0.02; })) cr.push(y);
+            continue;
+          }
           var x0 = Math.floor(Math.min(a.x, b.x, c.x) / C), x1 = Math.floor(Math.max(a.x, b.x, c.x) / C), z0 = Math.floor(Math.min(a.z, b.z, c.z) / C), z1 = Math.floor(Math.max(a.z, b.z, c.z) / C);
           [a, b, c].forEach(function (v) { mark(Math.floor(v.x / C), Math.floor(v.z / C), y); });
           if ((x1 - x0 + 1) * (z1 - z0 + 1) > 40000) continue;
@@ -1220,15 +1224,28 @@ var View3D = (function () {
           continue;
         }
         if (Math.abs(e1.y / L) > 0.3 || top - bot < 0.05 || top - bot > 0.35) continue; // 蹴上げだけ
-        ii.forEach(function (i, n) { treadV[vk([a, b, c][n].x, [a, b, c][n].z, oy[i])] = 1; });
+        var cd = { keys: ii.map(function (i, n) { return vk([a, b, c][n].x, [a, b, c][n].z, oy[i]); }), x: (a.x + b.x + c.x) / 3, z: (a.z + b.z + c.z) / 3, t: top, b: bot, r: null };
+        cand.push(cd);
         var tops = ii.filter(function (i) { return oy[i] > top - 0.01; });
         if (tops.length !== 2) continue; // 上の辺が水平な三角形（蹴上げの四角の片方）で、段のへりを 1 本
         var P = new THREE.Vector3().fromBufferAttribute(p, tops[0]), Q = new THREE.Vector3().fromBufferAttribute(p, tops[1]);
         var dx = Q.x - P.x, dz = Q.z - P.z, len = Math.hypot(dx, dz);
         if (len < 0.2) continue;
         var yb = Math.min(a.y, b.y, c.y);
-        risers.push({ P: P, Q: Q, t: top, b: bot, yt: Math.max(P.y, Q.y), yb: yb, ux: dx / len, uz: dz / len, len: len, mx: (P.x + Q.x) / 2, mz: (P.z + Q.z) / 2 });
+        cd.r = { P: P, Q: Q, t: top, b: bot, yt: Math.max(P.y, Q.y), yb: yb, ux: dx / len, uz: dz / len, len: len, mx: (P.x + Q.x) / 2, mz: (P.z + Q.z) / 2 };
       }
+    });
+    // 蹴上げの候補のうち、上の端の高さに床（天井でない水平な面）があり、上下の端が天井の高さと重ならないものだけを階段の段とする。
+    // 天井の高さが 5〜35 cm 変わる所の縦の面（新宿西口で候補の約 3 割）を段と見て、天井に段のへりの黒い線を描いていた（2026-10-11 利用者「地下街の天井に黒い線が何本も見えるけど、これはなに？」）
+    function near(map, cs, x, z, y, tol) {
+      var ix = Math.floor(x / cs), iz = Math.floor(z / cs);
+      for (var i = -1; i <= 1; i++) for (var j = -1; j <= 1; j++) if ((map[(ix + i) + ',' + (iz + j)] || []).some(function (h) { return Math.abs(h - y) < tol; })) return true;
+      return false;
+    }
+    cand.forEach(function (cd) {
+      if (!near(cells, C, cd.x, cd.z, cd.t, 0.03) || near(ceil, 2, cd.x, cd.z, cd.t, 0.05) || near(ceil, 2, cd.x, cd.z, cd.b, 0.05)) return;
+      cd.keys.forEach(function (k) { treadV[k] = 1; });
+      if (cd.r) risers.push(cd.r);
     });
     return {
       cells: cells, risers: risers,
@@ -2115,7 +2132,7 @@ var View3D = (function () {
   function drawVert(cells) {
     vertObjs.forEach(function (m) { scene.remove(m); var k = netMeshes.indexOf(m); if (k >= 0) netMeshes.splice(k, 1); });
     vertObjs = [];
-    var cMuted = css('--muted'), vert = {}, vertR = {};
+    var cMuted = css('--muted'), vert = {}, vertR = {}, vertN = {}, vertT = {};
     if (fpvStairs) { scene.remove(fpvStairs); fpvStairs = null; }
     var tread = [], nose = [], riser = [], wall = [], tact = [];
     // 注意帯（黄色。案 2d）: 階段の上り口の先 30〜60 cm と下り口の手前 5〜35 cm。ほかの階段の端と 2.5 m 以内で続く端（踊り場など）には置かない
@@ -2126,6 +2143,7 @@ var View3D = (function () {
       var a = sg[0], b = sg[1];
       if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }))) return;
       stairGeo(sg, tread, riser, wall, nose);
+      var nT = tact.length;
       var top = a.y >= b.y ? a : b, bot = top === a ? b : a, hx = bot.x - top.x, hz = bot.z - top.z, hl = Math.hypot(hx, hz);
       if (hl >= 0.3 && top.y - bot.y >= 0.3) {
         var ux = hx / hl, uz = hz / hl, wx = -uz, wz = ux;
@@ -2137,8 +2155,10 @@ var View3D = (function () {
       }
       // 外から見るときも、斜めの帯ではなく段のある形（踏み面と蹴上げ）で描く（2026-10-09 利用者「構内図の階段、エスカレータについて、
       // 斜め線ではなく、段がある絵にできる？」）。高さの差が小さく段が作れないものは前の帯のまま
-      var arr = vert[sg[2]] = vert[sg[2]] || [], n0 = arr.length, rs = vertR[sg[2]] = vertR[sg[2]] || [];
-      stairGeo([a, b, sg[2], false], arr, rs, []); // 踏み面は明るく、蹴上げは濃く（段が読めるように）
+      // 色と描き方は地下街の階段と同じ（踏み面は木の色、蹴上げは白、段のへりは濃い線、上り口・下り口に黄色の注意帯。2026-10-11 利用者「構内図の階段デザインを地下街と同じにして」）
+      var arr = vert[sg[2]] = vert[sg[2]] || [], n0 = arr.length, rs = vertR[sg[2]] = vertR[sg[2]] || [], ns = vertN[sg[2]] = vertN[sg[2]] || [];
+      stairGeo([a, b, sg[2], false], arr, rs, [], ns);
+      if (tact.length > nT) (vertT[sg[2]] = vertT[sg[2]] || []).push.apply(vertT[sg[2]], tact.slice(nT));
       if (arr.length === n0) {
         var dx = b.x - a.x, dz = b.z - a.z, hl = Math.hypot(dx, dz), px = -dz / hl * 0.9, pz = dx / hl * 0.9;
         arr.push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
@@ -2171,10 +2191,12 @@ var View3D = (function () {
       fg.add(new THREE.Mesh(geo, mat));
     });
     fg.visible = fpv; fpvStairs = fg; scene.add(fg);
-    [[vert, css('--walk'), 0.5], [vertR, cMuted, 0.75]].forEach(function (d) {
+    [[vert, UBLD_STEP, 0.5], [vertR, UBLD_WALL, 0.75], [vertN, UBLD_NOSE, 0.75], [vertT, UBLD_TACTILE, 0.75]].forEach(function (d) {
       Object.keys(d[0]).forEach(function (key) {
         if (!d[0][key].length) return;
         var m = ribbonMesh(d[0][key], d[1], d[2]);
+        m.geometry.setAttribute('ufloor', new THREE.Float32BufferAttribute(new Float32Array(d[0][key].length / 3), 1));
+        ubldFloorTiles(m.material); // 面の向きで明るさ（地下街と同じ）
         m.userData.base = d[2]; m.userData.lv = key.split(':').map(Number); m.userData.net = true; m.userData.stair = true; netMeshes.push(m); scene.add(m); vertObjs.push(m);
       });
     });
