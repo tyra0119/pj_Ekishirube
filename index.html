@@ -2224,7 +2224,7 @@ var View3D = (function () {
     });
     // 床の板: 構内図にも地下街にも床の無い平らな通路（踊り場など）。幅 2.6 m、両端を 0.8 m 伸ばしてつなぐ
     // （2026-10-09 利用者「階段途中の床が消えてるね」。リアル視点で通路網の帯を消したので、踊り場の床が無かった）
-    var floor = [], floorLv = {};
+    var floor = [], floorLv = {}, pieces = {};
     flatSegs.forEach(function (sg) {
       var a = sg[0], b = sg[1];
       if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }))) return;
@@ -2243,6 +2243,7 @@ var View3D = (function () {
         var quad = [ax + px, q0, az + pz, ax - px, q0, az - pz, bx - px, q1, bz - pz, ax + px, q0, az + pz, bx - px, q1, bz - pz, bx + px, q1, bz + pz];
         floor.push.apply(floor, quad);
         var fl = floorLv[sg[2]] = floorLv[sg[2]] || []; fl.push.apply(fl, quad);
+        (pieces[sg[2]] = pieces[sg[2]] || []).push({ ax: ax, az: az, bx: bx, bz: bz, ux: ux, uz: uz, px: px, pz: pz, q0: q0, q1: q1, hl: (s1 - s0) / 2 });
       }
     });
     var fg = new THREE.Group();
@@ -2274,6 +2275,34 @@ var View3D = (function () {
       var m = new THREE.Mesh(geo, mat);
       m.renderOrder = -1; m.userData.lv = [Number(lv), Number(lv)]; m.userData.space = true; m.userData.net = true;
       netMeshes.push(m); scene.add(m); vertObjs.push(m);
+      // 外まわりの黒い輪郭線（構内図の床と同じ）。板の辺のうち、すぐ外（5 cm）がほかの板の中なら内側の辺として引かない
+      // （2026-10-11 利用者「他の床を同じように、黒枠をつけるともっとよくなる」）
+      var ps = pieces[lv] || [], ln = [];
+      function insideAny(x, z, y, self) {
+        return ps.some(function (q) {
+          if (q === self) return false;
+          var cx = (q.ax + q.bx) / 2, cz = (q.az + q.bz) / 2, dx = x - cx, dz = z - cz;
+          if (Math.abs(y - (q.q0 + q.q1) / 2) > 0.5) return false;
+          var along = dx * q.ux + dz * q.uz, w = Math.hypot(q.px, q.pz), across = (dx * q.px + dz * q.pz) / w;
+          return Math.abs(along) <= q.hl + 0.01 && Math.abs(across) <= w + 0.01;
+        });
+      }
+      ps.forEach(function (q) {
+        var c = [[q.ax + q.px, q.q0, q.az + q.pz], [q.bx + q.px, q.q1, q.bz + q.pz], [q.bx - q.px, q.q1, q.bz - q.pz], [q.ax - q.px, q.q0, q.az - q.pz]];
+        var mx = (q.ax + q.bx) / 2, mz = (q.az + q.bz) / 2;
+        for (var e = 0; e < 4; e++) {
+          var A = c[e], B = c[(e + 1) % 4], ex = (A[0] + B[0]) / 2, ez = (A[2] + B[2]) / 2, ey = (A[1] + B[1]) / 2;
+          var ox = ex - mx, oz = ez - mz, ol = Math.hypot(ox, oz) || 1;
+          if (insideAny(ex + ox / ol * 0.05, ez + oz / ol * 0.05, ey, q)) continue;
+          ln.push(A[0], A[1] + 0.02, A[2], B[0], B[1] + 0.02, B[2]);
+        }
+      });
+      if (ln.length) {
+        var lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(ln, 3));
+        var lm = new THREE.LineSegments(lg, new THREE.LineBasicMaterial({ color: UBLD_NOSE, transparent: true, opacity: 0.5, depthWrite: false }));
+        lm.userData.base = 0.5; lm.userData.lv = [Number(lv), Number(lv)]; lm.userData.space = true; lm.userData.outline = true; lm.userData.net = true;
+        netMeshes.push(lm); scene.add(lm); vertObjs.push(lm);
+      }
     });
     [[vert, UBLD_STEP, 0.5], [vertR, UBLD_WALL, 0.75], [vertN, UBLD_NOSE, 0.75], [vertT, UBLD_TACTILE, 0.75]].forEach(function (d) {
       Object.keys(d[0]).forEach(function (key) {
