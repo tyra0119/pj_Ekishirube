@@ -2934,11 +2934,10 @@ var View3D = (function () {
     });
 
     // 出発と目的地: 地図アプリのようなピン（出発は濃い紺に白で「出発」、目的地は赤に白で「到着」）。先がその場所を指す。
-    // 画面上でいつも同じ大きさで、通路や建物に隠れない。場所には同じ色の小さな玉
+    // 画面上でいつも同じ大きさで、通路や建物に隠れない。場所の玉（半径 1 m）はやめた（ピンの先で足りる。リアル視点では大きな赤い玉になって
+    // いた。2026-10-11 利用者「到着の大きい丸い玉は無くてもいいかなあ」）
     [[from, pts[0], '出発', css('--sign')], [to, pts[pts.length - 1], '到着', '#d23a3a']].forEach(function (pair) {
       var ep = pair[0], p = pair[1];
-      var ball = new THREE.Mesh(new THREE.SphereGeometry(1.0, 16, 12), new THREE.MeshBasicMaterial({ color: pair[3] }));
-      ball.position.copy(p); scene.add(ball);
       var pin = pinEl(pair[2], pair[3]);
       pinBox.appendChild(pin); pins.push({ pos: p.clone(), el: pin, end: ep === to });
       if (ep.type === 'plat') {
