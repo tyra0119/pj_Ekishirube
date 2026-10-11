@@ -2870,6 +2870,32 @@ var View3D = (function () {
       ubldFloorTiles(m.material);
       m.userData.base = 0.5; m.userData.lv = key.split(':').map(Number); m.userData.net = true; m.userData.stair = true; netMeshes.push(m); scene.add(m);
     });
+    // 床の無い階段の端（中間の階の踊り場・行き止まり）に踊り場の板（幅 2.6 m、奥行き 1.4 m）。同じ階の構内図の床の上でなく、平らな通路にも
+    // つながらず、まっすぐ続く階段も無い端だけ。構内図の床は整数の階ごとにしか無く、通路網は踊り場を -2.5 などの中間の階にしているので、
+    // 階段が宙に浮いたり途中で終わったりして見えていた（2026-10-11 利用者「階段が途中で終わっている、空中に浮いてる階段、が、特に、国立競技場に
+    // 多いのだが、なんで？」。国立競技場は階段の端 106 のうち 66 が中間の階）
+    function hd(p, q) { return Math.hypot(p.x - q.x, p.z - q.z); }
+    var landings = [];
+    vertSegs.forEach(function (sg) {
+      var a = sg[0], b = sg[1], lv = sg[2].split(':').map(Number), dx = b.x - a.x, dz = b.z - a.z, h = Math.hypot(dx, dz);
+      if (h < 0.3) return;
+      var ux = dx / h, uz = dz / h;
+      [[a, b, -1], [b, a, 1]].forEach(function (d) {
+        var e = d[0], o = d[1], lvE = e.y < o.y ? lv[0] : lv[1];
+        if (mapPolys && onMap(e.x, -e.z, lvE)) return;
+        if (flatSegs.some(function (f) { return [f[0], f[1]].some(function (q) { return hd(q, e) < 0.6 && Math.abs(q.y - e.y) < 0.3; }); })) return;
+        var straight = vertSegs.some(function (s2) {
+          if (s2 === sg) return false;
+          var q = [s2[0], s2[1]].filter(function (p) { return hd(p, e) < 0.6 && Math.abs(p.y - e.y) < 0.3; })[0];
+          if (!q) return false;
+          var r = q === s2[0] ? s2[1] : s2[0], vx = r.x - q.x, vz = r.z - q.z, vl = Math.hypot(vx, vz) || 1;
+          return (vx * ux + vz * uz) / vl * d[2] > 0.7; // つなぎ目から先へ、同じ向きに続く
+        });
+        if (straight) return;
+        landings.push([e.clone(), new THREE.Vector3(e.x + ux * d[2] * 1.4, e.y, e.z + uz * d[2] * 1.4), lvE]);
+      });
+    });
+    landings.forEach(function (f) { flatSegs.push(f); });
     shaftSegs = shafts;
     drawVert(null);
 
