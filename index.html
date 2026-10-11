@@ -1190,6 +1190,7 @@ var View3D = (function () {
   }
   // 地下街の階段と床の下調べ（高さは元の高さ origY、m）。地下街のモデルには階段の部品の種類が無く、踏み面は床、蹴上げは壁として入っている。
   // 高さ 5〜35 cm の縦の面を蹴上げとみなす。蹴上げの頂点だけでできた水平な面は踏み面（踊り場も）。床の高さは 50 cm 角のます目ごとに持つ
+  var UBLD_WALLTYPE = { 'uro:WallSurface': 1, 'uro:InteriorWallSurface': 1, 'uro:Door': 1, 'uro:ClosureSurface': 1, 'uro:Window': 1 };
   function ubldSurvey(meshes) {
     var C = 0.5, cells = {}, treadV = {}, risers = [], cand = [], ceil = {};
     var a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
@@ -1208,7 +1209,9 @@ var View3D = (function () {
         if (Math.abs(e1.y / L) > 0.7) { // 水平な面（天井を除く）: 床の高さ
           var ty = ft && bid ? ft[bid.getX(ii[0])] : '';
           var y = (ys[0] + ys[1] + ys[2]) / 3;
-          if (ty === 'uro:CeilingSurface' || ty === 'uro:RoofSurface') { // 天井の高さ（2 m 角のます目ごと）
+          // 壁の種類の水平な面（垂れ壁・梁の下面、壁の上面）と天井は、床に数えない。垂れ壁の下面を床とみて、天井の近くに巾木・床の影・段のへりを
+          // 描いていた（2026-10-11 利用者「地下街の天井に黒い線がまだ残ってる」「リアル視点で表示されているわけではない」）
+          if (ty === 'uro:CeilingSurface' || ty === 'uro:RoofSurface' || UBLD_WALLTYPE[ty]) { // 天井の高さ（2 m 角のます目ごと）
             var ck = Math.floor((a.x + b.x + c.x) / 6) + ',' + Math.floor((a.z + b.z + c.z) / 6), cr = ceil[ck] || (ceil[ck] = []);
             if (!cr.some(function (h) { return Math.abs(h - y) < 0.02; })) cr.push(y);
             continue;
@@ -1285,6 +1288,7 @@ var View3D = (function () {
         cc.copy(UBLD_FLOOR).lerp(UBLD_FLOOR_DARK, kd);
         if (e1.y > 0) { fl.setX(i0, 1); fl.setX(i1, 1); fl.setX(i2, 1); }
       }
+      else if (Math.abs(e1.y) > 0.7 && UBLD_WALLTYPE[ty]) cc.copy(UBLD_WALL); // 壁の種類の水平な面（垂れ壁・梁の下面、壁の上面）は壁の色
       else if (Math.abs(e1.y) > 0.7) cc.copy(ty || e1.y < 0 ? UBLD_STEP : UBLD_FLOOR); // 設備（階段など）の水平な面。部品の種類の無い箱（LOD1）は上の面を床に
       else {
         cc.copy(UBLD_WALL);
@@ -1372,7 +1376,15 @@ var View3D = (function () {
           });
         }
       }
-      var ln = new THREE.LineSegments(new THREE.EdgesGeometry(g, 30), new THREE.LineBasicMaterial({ color: UBLD_LINE, transparent: true, opacity: 0.07, depthWrite: false }));
+      // 輪郭線は天井の面（ufloor = 2）を除いて作る。外から見るときは天井を描かないので、天井の折れ目の線だけが天井の高さに黒い線として
+      // 浮いていた（2026-10-11 利用者「地下街の天井に黒い線がまだ残ってる」「天井の黒い線は、リアル視点で表示されているわけではない」）
+      var src = idx ? idx.array : null, keepT = [], ufl = g.attributes.ufloor;
+      for (var q = 0; q + 2 < cnt; q += 3) {
+        var v0 = src ? src[q] : q;
+        if (ufl.getX(v0) !== 2) keepT.push(v0, src ? src[q + 1] : q + 1, src ? src[q + 2] : q + 2);
+      }
+      var eg = new THREE.BufferGeometry(); eg.setAttribute('position', p); eg.setIndex(keepT);
+      var ln = new THREE.LineSegments(new THREE.EdgesGeometry(eg, 30), new THREE.LineBasicMaterial({ color: UBLD_LINE, transparent: true, opacity: 0.07, depthWrite: false }));
       ln.renderOrder = 1; ln.userData.city = 'ubld'; ln.userData.keep = true; ln.userData.soft = 0.3; out.push(ln);
     });
     // 同じ直線の上で重なる・接する辺をつなげる
@@ -1404,6 +1416,8 @@ var View3D = (function () {
       sh.push(A.x, y, A.z, B.x, y, B.z, B2.x, y, B2.z, A.x, y, A.z, B2.x, y, B2.z, A2.x, y, A2.z); sa.push(0.2, 0.2, 0, 0.2, 0, 0);
       [[A, A2, -L.ux, -L.uz], [B, B2, L.ux, L.uz]].forEach(function (d) {
         if (blocked(r, d[0], d[2], d[3])) return;
+        var len = Math.hypot(B.x - A.x, B.z - A.z);
+        if (len < 0.4) return; // 丸い柱など短い面の並びでは広げない（広げた先が重なり、柱のまわりの影が星の形にとがっていた）
         var E = d[0], E2 = d[1], E3 = { x: E2.x + d[2] * W, z: E2.z + d[3] * W };
         sh.push(E.x, y, E.z, E2.x, y, E2.z, E3.x, y, E3.z); sa.push(0.2, 0, 0);
       });
