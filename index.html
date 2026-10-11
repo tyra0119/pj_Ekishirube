@@ -1155,35 +1155,105 @@ var View3D = (function () {
   // 駅ごとに消す地下街の面（gml_id）。通路網が突き抜けている本当の壁（2026-10-08 利用者「上記 2 件の壁は、消して」）:
   // 新宿西口 D1 の出入口の先（402N0020→402N0187）の細い仕切り 2 面と、ホームへ下りる手前（402N0175→402N0220）の壁 2 面
   var UBLD_HIDE = { '402': { 'bdry_7e4c5782-b3ad-48d5-a56c-05a678fa4fd0': 1, 'bdry_1cd36a68-d3bb-4f94-842a-1d4ca3157add': 1, 'bdry_2ef855c3-ad42-4d3b-afd5-0592c8392d98': 1, 'bdry_a2505b93-a24e-4a6a-a3c0-92a2b85447aa': 1 } };
-  // 地下街の面の色（Machiawase と同じ。2026-10-11）。1 色だと横から見たときに立体に見えなかった。床は濃いめ（深い所ほど暗く）で、
-  // 約 2 m 角の市松の明暗を描く（ubldFloorTiles。描くときに位置から決める。2026-10-11 利用者「床のタイル、もっと小さくしてほしい」で 5 m → 2 m）。壁は向きで明るさを変える（南西寄りを向く面が明るく、反対は暗く）
-  var UBLD_FLOOR = new THREE.Color(0x7f90b2), UBLD_FLOOR_DARK = new THREE.Color(0x5d6f96), UBLD_STEP = new THREE.Color(0x9fadc8), UBLD_CEIL = new THREE.Color(0xb9c6dc),
-    UBLD_WALL_DARK = new THREE.Color(0x64728f), UBLD_WALL_LIGHT = new THREE.Color(0xf0f3f8);
-  // 壁（ufloor = 3）には約 50 cm 角の細い線の網目を薄く描く。階段の段は、地下街にない所に描く段（stairGeo）だけ段のへりに細い暗い線
-  // （2026-10-11 利用者「リアル視点の階段について、一色だと分かりにくいね。明暗付けられる？壁も一色だと分かりにくい時がある」→「階段はシミみたいに
-  // なって、見辛くなった。壁もちょっとみづらい。壁はさらに小さなメッシュを薄く表示する感じにしてみて」。1 段ごとの交互の色と 2 m ごとの帯はやめた）
-  // 天井（CeilingSurface・RoofSurface。ufloor = 2）は、外から見る立体図では描かない（中が見えるように）。リアル視点では描く
-  // （天井が無いと上の街や空が見える）（2026-10-11 利用者「地下街の天井表示は不要」）
+  // 地下街・構内図・リアル視点の階段の描き方（2026-10-11 利用者「Claude Designにデザインを考えて貰った」「推奨されている「2d」で作成できる？」。
+  // 案 2d = 1d（部位ごとの色 ＋ 面の向きの明るさ ＋ 薄い輪郭線 ＋ 壁の足元の接地影）に、床の薄い目地・巾木・床の接地影・階段の注意帯を足したもの）。
+  // 光は使わず（MeshBasicMaterial）、面の向きで明るさを決める: 水平な面 100%、縦の面は東西を向く面 82%・南北を向く面 68%（あいだはなめらかに）。
+  // 踏み面（と踊り場）は木の色、壁と蹴上げは白、床はグレージュ（深い所ほど少し暗く）、段のへりは濃い線
+  var UBLD_FLOOR = new THREE.Color(0xcfccc5), UBLD_FLOOR_DARK = new THREE.Color(0xaaa59c), UBLD_STEP = new THREE.Color(0xb7855a), UBLD_CEIL = new THREE.Color(0xdcd8d0),
+    UBLD_WALL = new THREE.Color(0xf3f0ea), UBLD_NOSE = new THREE.Color(0x2a2826), UBLD_TACTILE = new THREE.Color(0xe8b520), UBLD_LINE = new THREE.Color(0x1c1b19);
+  // 面の種類（ufloor）: 0 その他（踏み面・蹴上げなど） 1 床（60 cm 角の目地を濃さ 12% で。遠くで細かくなりすぎる所は消す）
+  // 2 天井（外から見る立体図では描かない。リアル視点では描く。2026-10-11 利用者「地下街の天井表示は不要」） 3 壁（床からの高さ uh（m）で、
+  // 8 cm までは濃い巾木、その上 70 cm までを足元ほど暗く）。面の向きは画面上の位置の変化から求める（頂点を共有する面でも混ざらない）
   function ubldFloorTiles(mat) {
     mat.userData.hideCeil = { value: 1 };
+    mat.extensions = { derivatives: true };
     mat.onBeforeCompile = function (sh) {
       sh.uniforms.uHideCeil = mat.userData.hideCeil;
-      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float ufloor;\nvarying float vFloor;\nvarying vec2 vFloorXZ;\nvarying vec3 vWPos;\nvarying vec3 vWN;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFloor = ufloor; vWPos = (modelMatrix * vec4(position, 1.0)).xyz; vFloorXZ = vWPos.xz; vWN = normalize(mat3(modelMatrix) * normal);');
-      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFloor;\nvarying vec2 vFloorXZ;\nvarying vec3 vWPos;\nvarying vec3 vWN;\nuniform float uHideCeil;')
-        .replace('#include <color_fragment>', '#include <color_fragment>\nif (vFloor > 2.5) { vec2 gw = vec2(abs(vWN.z) > abs(vWN.x) ? vWPos.x : vWPos.z, vWPos.y) / 0.5; vec2 fw = abs(fract(gw) - 0.5); diffuseColor.rgb *= 1.0 - 0.045 * step(0.48, max(fw.x, fw.y)); }\nelse if (vFloor > 1.5) { if (uHideCeil > 0.5) discard; }\nelse if (vFloor > 0.5) { vec2 q = floor(vFloorXZ / 2.0); diffuseColor.rgb *= mod(q.x + q.y, 2.0) < 0.5 ? 0.86 : 1.08; }');
+      sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nattribute float ufloor;\nattribute float uh;\nvarying float vFloor;\nvarying float vUH;\nvarying vec3 vWPos;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvFloor = ufloor; vUH = uh; vWPos = (modelMatrix * vec4(position, 1.0)).xyz;');
+      sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vFloor;\nvarying float vUH;\nvarying vec3 vWPos;\nuniform float uHideCeil;')
+        .replace('#include <color_fragment>', ['#include <color_fragment>',
+          'if (vFloor > 1.5 && vFloor < 2.5 && uHideCeil > 0.5) discard;',
+          'vec3 fn = normalize(cross(dFdx(vWPos), dFdy(vWPos)));',
+          'float lit = 1.0;',
+          'if (abs(fn.y) < 0.7) lit = mix(0.68, 0.82, fn.x * fn.x / max(1e-6, fn.x * fn.x + fn.z * fn.z));',
+          'if (vFloor > 2.5) {',
+          '  if (vUH < 0.08) diffuseColor.rgb = vec3(0.227, 0.220, 0.208);',
+          '  else lit *= mix(0.7, 1.0, smoothstep(0.0, 0.7, vUH));',
+          '} else if (vFloor > 0.5 && vFloor < 1.5) {',
+          '  vec2 gp = vWPos.xz / 0.6, gw = max(fwidth(gp), vec2(1e-4)), gd = abs(fract(gp - 0.5) - 0.5) / gw;',
+          '  lit *= 1.0 - 0.12 * (1.0 - min(min(gd.x, gd.y), 1.0)) * (1.0 - smoothstep(0.12, 0.35, max(gw.x, gw.y)));',
+          '}',
+          'diffuseColor.rgb *= lit;'].join('\n'));
     };
-    mat.customProgramCacheKey = function () { return 'ubldFloorTiles'; };
+    mat.customProgramCacheKey = function () { return 'ubldShade2d'; };
   }
-  function ubldColors(o, ground) {
+  // 地下街の階段と床の下調べ（高さは元の高さ origY、m）。地下街のモデルには階段の部品の種類が無く、踏み面は床、蹴上げは壁として入っている。
+  // 高さ 5〜35 cm の縦の面を蹴上げとみなす。蹴上げの頂点だけでできた水平な面は踏み面（踊り場も）。床の高さは 50 cm 角のます目ごとに持つ
+  function ubldSurvey(meshes) {
+    var C = 0.5, cells = {}, treadV = {}, risers = [];
+    var a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
+    function vk(x, z, y) { return Math.round(x * 100) + ',' + Math.round(z * 100) + ',' + Math.round(y * 100); }
+    function mark(ix, iz, y) { var k = ix + ',' + iz, r = cells[k] || (cells[k] = []); if (!r.some(function (h) { return Math.abs(h - y) < 0.02; })) r.push(y); }
+    meshes.forEach(function (o) {
+      var g = o.geometry, p = g.attributes.position, idx = g.index, cnt = idx ? idx.count : p.count, oy = o.userData.origY;
+      var ft = o.userData.ftype, bid = g.attributes._batchid || g.attributes._feature_id_0;
+      if (!oy) return;
+      for (var t = 0; t + 2 < cnt; t += 3) {
+        var ii = [idx ? idx.getX(t) : t, idx ? idx.getX(t + 1) : t + 1, idx ? idx.getX(t + 2) : t + 2];
+        a.fromBufferAttribute(p, ii[0]); b.fromBufferAttribute(p, ii[1]); c.fromBufferAttribute(p, ii[2]);
+        e1.subVectors(b, a); e2.subVectors(c, a); e1.cross(e2);
+        var L = e1.length(); if (L < 1e-9) continue;
+        var ys = ii.map(function (i) { return oy[i]; }), top = Math.max.apply(null, ys), bot = Math.min.apply(null, ys);
+        if (Math.abs(e1.y / L) > 0.7) { // 水平な面（天井を除く）: 床の高さ
+          var ty = ft && bid ? ft[bid.getX(ii[0])] : '';
+          if (ty === 'uro:CeilingSurface' || ty === 'uro:RoofSurface') continue;
+          var y = (ys[0] + ys[1] + ys[2]) / 3;
+          var x0 = Math.floor(Math.min(a.x, b.x, c.x) / C), x1 = Math.floor(Math.max(a.x, b.x, c.x) / C), z0 = Math.floor(Math.min(a.z, b.z, c.z) / C), z1 = Math.floor(Math.max(a.z, b.z, c.z) / C);
+          [a, b, c].forEach(function (v) { mark(Math.floor(v.x / C), Math.floor(v.z / C), y); });
+          if ((x1 - x0 + 1) * (z1 - z0 + 1) > 40000) continue;
+          for (var ix = x0; ix <= x1; ix++) for (var iz = z0; iz <= z1; iz++) {
+            var px = (ix + 0.5) * C, pz = (iz + 0.5) * C;
+            var d1 = (px - b.x) * (a.z - b.z) - (a.x - b.x) * (pz - b.z), d2 = (px - c.x) * (b.z - c.z) - (b.x - c.x) * (pz - c.z), d3 = (px - a.x) * (c.z - a.z) - (c.x - a.x) * (pz - a.z);
+            if (!((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0))) mark(ix, iz, y);
+          }
+          continue;
+        }
+        if (Math.abs(e1.y / L) > 0.3 || top - bot < 0.05 || top - bot > 0.35) continue; // 蹴上げだけ
+        ii.forEach(function (i, n) { treadV[vk([a, b, c][n].x, [a, b, c][n].z, oy[i])] = 1; });
+        var tops = ii.filter(function (i) { return oy[i] > top - 0.01; });
+        if (tops.length !== 2) continue; // 上の辺が水平な三角形（蹴上げの四角の片方）で、段のへりを 1 本
+        var P = new THREE.Vector3().fromBufferAttribute(p, tops[0]), Q = new THREE.Vector3().fromBufferAttribute(p, tops[1]);
+        var dx = Q.x - P.x, dz = Q.z - P.z, len = Math.hypot(dx, dz);
+        if (len < 0.2) continue;
+        var yb = Math.min(a.y, b.y, c.y);
+        risers.push({ P: P, Q: Q, t: top, b: bot, yt: Math.max(P.y, Q.y), yb: yb, ux: dx / len, uz: dz / len, len: len, mx: (P.x + Q.x) / 2, mz: (P.z + Q.z) / 2 });
+      }
+    });
+    return {
+      cells: cells, risers: risers,
+      isTread: function (pts) { return pts.every(function (q) { return treadV[vk(q[0], q[1], q[2])]; }); },
+      // (x, z) の近く（まわり 3×3 のます目）で、高さ y 以下の一番高い床。無ければ null
+      floorBelow: function (x, z, y) {
+        var ix = Math.floor(x / C), iz = Math.floor(z / C), best = null;
+        for (var i = -1; i <= 1; i++) for (var j = -1; j <= 1; j++) (cells[(ix + i) + ',' + (iz + j)] || []).forEach(function (h) { if (h <= y + 0.03 && (best === null || h > best)) best = h; });
+        return best !== null && y - best < 6 ? best : null;
+      },
+      hasFloor: function (x, z, y) { return (cells[Math.floor(x / C) + ',' + Math.floor(z / C)] || []).some(function (h) { return Math.abs(h - y) < 0.05; }); }
+    };
+  }
+  function ubldColors(o, ground, sv) {
     var g = o.geometry, p = g.attributes.position, idx = g.index, cnt = idx ? idx.count : p.count;
     var ft = o.userData.ftype, oy = o.userData.origY, bid = g.attributes._batchid || g.attributes._feature_id_0;
     var col = g.attributes.color;
     if (!col) { col = new THREE.BufferAttribute(new Float32Array(p.count * 3), 3); g.setAttribute('color', col); }
-    var fl = g.attributes.ufloor; // 1: 床（市松の明暗を描く） 2: 天井（外から見るときは描かない） 3: 壁（約 2 m ごとの帯）
+    var fl = g.attributes.ufloor; // 面の種類（ubldFloorTiles）
     if (!fl) { fl = new THREE.BufferAttribute(new Float32Array(p.count), 1); g.setAttribute('ufloor', fl); }
+    var uh = g.attributes.uh; // 壁の頂点の、足元の床からの高さ（m。壁でなければ 99）
+    if (!uh) { uh = new THREE.BufferAttribute(new Float32Array(p.count), 1); g.setAttribute('uh', uh); }
+    for (var k0 = 0; k0 < p.count; k0++) uh.setX(k0, 99);
+    var low = [];
     var a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3(), cc = new THREE.Color();
-    var lx = -0.6, lz = 0.8; // 壁を明るくする向き（水平。立体図の光とおおよそ同じ）
     for (var t = 0; t + 2 < cnt; t += 3) {
       var i0 = idx ? idx.getX(t) : t, i1 = idx ? idx.getX(t + 1) : t + 1, i2 = idx ? idx.getX(t + 2) : t + 2;
       a.fromBufferAttribute(p, i0); b.fromBufferAttribute(p, i1); c.fromBufferAttribute(p, i2);
@@ -1192,6 +1262,7 @@ var View3D = (function () {
       e1.divideScalar(L);
       var ty = ft && bid ? ft[bid.getX(i0)] : '';
       if (ty === 'uro:CeilingSurface' || ty === 'uro:RoofSurface') { cc.copy(UBLD_CEIL); fl.setX(i0, 2); fl.setX(i1, 2); fl.setX(i2, 2); }
+      else if (Math.abs(e1.y) > 0.7 && oy && sv && sv.isTread([[a.x, a.z, oy[i0]], [b.x, b.z, oy[i1]], [c.x, c.z, oy[i2]]])) cc.copy(UBLD_STEP); // 踏み面・踊り場（蹴上げの頂点だけでできた面）
       else if (ty === 'uro:FloorSurface' || ty === 'uro:GroundSurface') {
         var kd = oy && ground != null ? Math.min(1, Math.max(0, (ground - oy[i0] - 5) / 8)) : 0; // 地下 5 m から 13 m で 0〜1
         cc.copy(UBLD_FLOOR).lerp(UBLD_FLOOR_DARK, kd);
@@ -1199,43 +1270,139 @@ var View3D = (function () {
       }
       else if (Math.abs(e1.y) > 0.7) cc.copy(ty || e1.y < 0 ? UBLD_STEP : UBLD_FLOOR); // 設備（階段など）の水平な面。部品の種類の無い箱（LOD1）は上の面を床に
       else {
-        var h = Math.hypot(e1.x, e1.z) || 1, k = 0.5 + 0.5 * (e1.x * lx + e1.z * lz) / h;
-        cc.copy(UBLD_WALL_DARK).lerp(UBLD_WALL_LIGHT, k);
+        cc.copy(UBLD_WALL);
         fl.setX(i0, 3); fl.setX(i1, 3); fl.setX(i2, 3);
+        if (oy && sv) { // 足元の床（一番低い頂点の下の床）からの高さ。低い壁（蹴上げ・縁石。高さ 45 cm 未満）は巾木と影を付けない
+          var tri = [i0, i1, i2], lo = tri.reduce(function (m, i) { return oy[i] < oy[m] ? i : m; }, i0);
+          var F = sv.floorBelow(p.getX(lo), p.getZ(lo), oy[lo]);
+          if (F === null) {}
+          else if (Math.max(oy[i0], oy[i1], oy[i2]) - F < 0.45) low.push(i0, i1, i2);
+          else tri.forEach(function (i) { uh.setX(i, Math.min(uh.getX(i), oy[i] - F)); });
+        }
       }
       col.setXYZ(i0, cc.r, cc.g, cc.b); col.setXYZ(i1, cc.r, cc.g, cc.b); col.setXYZ(i2, cc.r, cc.g, cc.b);
     }
-    col.needsUpdate = true; fl.needsUpdate = true;
+    low.forEach(function (i) { uh.setX(i, 99); });
+    col.needsUpdate = true; fl.needsUpdate = true; uh.needsUpdate = true;
   }
-  // 地下街の階段の段のへり: 地下街のモデルには階段の部品の種類が無く、踏み面は床、蹴上げは壁として入っている。高さ 5〜35 cm の縦の面を
-  // 蹴上げとみなし、その上の水平な辺（次の段へ下りるへり）に幅 6 cm の暗い帯を描く（2026-10-11 利用者「地下街の階段にも、段のへり
-  //（次の段へ下りる所）に細い暗い線を入れて」）。位置は置き直した後（立体図の高さ）、高さの判定は元の高さ（origY、m）で
-  function ubldNosing(meshes) {
-    var out = [], a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
-    meshes.forEach(function (o) {
-      var g = o.geometry, p = g.attributes.position, idx = g.index, cnt = idx ? idx.count : p.count, oy = o.userData.origY;
-      if (!oy) return;
-      for (var t = 0; t + 2 < cnt; t += 3) {
-        var ii = [idx ? idx.getX(t) : t, idx ? idx.getX(t + 1) : t + 1, idx ? idx.getX(t + 2) : t + 2];
-        var ys = ii.map(function (i) { return oy[i]; }), top = Math.max.apply(null, ys), rise = top - Math.min.apply(null, ys);
-        if (rise < 0.05 || rise > 0.35) continue;
-        a.fromBufferAttribute(p, ii[0]); b.fromBufferAttribute(p, ii[1]); c.fromBufferAttribute(p, ii[2]);
-        e1.subVectors(b, a); e2.subVectors(c, a); e1.cross(e2);
-        var L = e1.length(); if (L < 1e-9 || Math.abs(e1.y / L) > 0.3) continue; // 縦の面だけ
-        var tops = ii.filter(function (i) { return oy[i] > top - 0.01; });
-        if (tops.length !== 2) continue; // 上の辺が水平な三角形（蹴上げの四角の片方）だけ
-        var P = new THREE.Vector3().fromBufferAttribute(p, tops[0]), Q = new THREE.Vector3().fromBufferAttribute(p, tops[1]);
-        var dx = Q.x - P.x, dz = Q.z - P.z, len = Math.hypot(dx, dz);
-        if (len < 0.2) continue;
-        var nx = -dz / len * 0.03, nz = dx / len * 0.03, y = Math.max(P.y, Q.y) + 0.01;
-        out.push(P.x + nx, y, P.z + nz, P.x - nx, y, P.z - nz, Q.x - nx, y, Q.z - nz, P.x + nx, y, P.z + nz, Q.x - nx, y, Q.z - nz, Q.x + nx, y, Q.z + nz);
+  // 地下街の飾り（2026-10-11 案 2d）。位置は置き直した後（立体図の高さ）、高さの判定は元の高さ（origY、m）で
+  // ・段のへり: 蹴上げの上の水平な辺（次の段へ下りるへり）から踏み面の側に幅 5 cm の濃い帯（2026-10-11 利用者「地下街の階段にも、段のへり（次の段へ下りる所）に細い暗い線を入れて」）
+  // ・注意帯: 階段の一番下の段の手前（5〜35 cm）と、一番上の段の先の床（30〜60 cm）に黄色の帯（点字ブロックに当たる。上下の出入口を目立たせる）
+  // ・床の接地影: 床に立つ壁の足元から 50 cm の床を、壁に近いほど暗く（20%）
+  // ・輪郭線: 面の折れ目（30 度以上）に濃さ 30% の細い線
+  function ubldDecor(meshes, sv) {
+    var out = [];
+    function strip(arr, P, Q, nx, nz, d0, d1, y) { // 辺 PQ から (nx, nz) の向きに d0〜d1 の帯
+      var ax = P.x + nx * d0, az = P.z + nz * d0, bx = Q.x + nx * d0, bz = Q.z + nz * d0, cx = Q.x + nx * d1, cz = Q.z + nz * d1, dx = P.x + nx * d1, dz = P.z + nz * d1;
+      arr.push(ax, y, az, bx, y, bz, cx, y, cz, ax, y, az, cx, y, cz, dx, y, dz);
+    }
+    function solid(arr, color) {
+      if (!arr.length) return;
+      var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(arr, 3));
+      var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: color, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2 }));
+      m.renderOrder = 1; m.userData.city = 'ubld'; m.userData.keep = true; out.push(m);
+    }
+    // 段のへりと注意帯
+    var nose = [], tact = [], R = sv.risers, grid = {};
+    R.forEach(function (r, i) { var k = Math.floor(r.mx / 2) + ',' + Math.floor(r.mz / 2); (grid[k] = grid[k] || []).push(i); });
+    R.forEach(function (r) {
+      var nx = -r.uz, nz = r.ux, y = r.yt + 0.01;
+      var up = 0, down = 0, gx = Math.floor(r.mx / 2), gz = Math.floor(r.mz / 2);
+      for (var i = -1; i <= 1; i++) for (var j = -1; j <= 1; j++) (grid[(gx + i) + ',' + (gz + j)] || []).forEach(function (n) {
+        var q = R[n]; if (q === r || Math.abs(q.ux * r.ux + q.uz * r.uz) < 0.95) return;
+        var ox = q.mx - r.mx, oz = q.mz - r.mz, d = ox * nx + oz * nz;
+        if (Math.abs(ox * r.ux + oz * r.uz) > (q.len + r.len) / 2 || Math.abs(d) < 0.15 || Math.abs(d) > 0.6) return;
+        if (Math.abs(q.b - r.t) < 0.04) up = d > 0 ? 1 : -1; // q は 1 段上
+        else if (Math.abs(q.t - r.b) < 0.04) down = d > 0 ? 1 : -1; // q は 1 段下
+      });
+      // 段のへりの線は、へりから踏み面の側へ 5 cm（踏み面の向きは上か下の段から。分からなければへりを中心に）
+      var tw = up ? up : down ? -down : 0;
+      if (tw) strip(nose, r.P, r.Q, nx * tw, nz * tw, 0, 0.05, y); else strip(nose, r.P, r.Q, nx, nz, -0.025, 0.025, y);
+      if (up && !down) { // 一番下の段: 下りた先（上る向きの反対）の床に
+        var mxb = r.mx - nx * up * 0.2, mzb = r.mz - nz * up * 0.2;
+        if (sv.hasFloor(mxb, mzb, r.b)) strip(tact, r.P, r.Q, -nx * up, -nz * up, 0.05, 0.35, r.yb + 0.012);
+      }
+      if (down && !up) { // 一番上の段: 上りきった先の床に
+        var mxt = r.mx - nx * down * 0.45, mzt = r.mz - nz * down * 0.45;
+        if (sv.hasFloor(mxt, mzt, r.t)) strip(tact, r.P, r.Q, -nx * down, -nz * down, 0.3, 0.6, r.yt + 0.012);
       }
     });
-    if (!out.length) return null;
-    var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
-    var m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: UBLD_WALL_DARK, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }));
-    m.renderOrder = 1; m.userData.city = 'ubld'; m.userData.keep = true;
-    return m;
+    solid(nose, UBLD_NOSE);
+    solid(tact, UBLD_TACTILE);
+    // 床の接地影と輪郭線。影は、壁の床に接する辺を同じ直線の上でつなげてから、床のある側に幅 50 cm の帯（壁に近いほど暗く）。
+    // 帯の端は 45 度に広げ、柱などの出っ張った角では隣の面の帯と継ぎ目なく回り込む。広げた先に別の壁があるとき（入り隅）は広げない
+    var sh = [], sa = [], a = new THREE.Vector3(), b = new THREE.Vector3(), lines = {};
+    meshes.forEach(function (o) {
+      var g = o.geometry, p = g.attributes.position, idx = g.index, cnt = idx ? idx.count : p.count, oy = o.userData.origY, uh = g.attributes.uh;
+      if (!oy || !uh) return;
+      for (var t = 0; t + 2 < cnt; t += 3) {
+        var ii = [idx ? idx.getX(t) : t, idx ? idx.getX(t + 1) : t + 1, idx ? idx.getX(t + 2) : t + 2];
+        if (g.attributes.ufloor.getX(ii[0]) !== 3) continue;
+        for (var e = 0; e < 3; e++) {
+          var i = ii[e], j = ii[(e + 1) % 3];
+          if (uh.getX(i) > 0.03 || uh.getX(j) > 0.03 || uh.getX(i) < -0.03 || uh.getX(j) < -0.03) continue; // 床に接する辺だけ
+          a.fromBufferAttribute(p, i); b.fromBufferAttribute(p, j);
+          var dx = b.x - a.x, dz = b.z - a.z, len = Math.hypot(dx, dz);
+          if (len < 0.1) continue;
+          var ux = dx / len, uz = dz / len;
+          if (ux < -1e-9 || (Math.abs(ux) < 1e-9 && uz < 0)) { ux = -ux; uz = -uz; }
+          var nx = -uz, nz = ux, fy = Math.min(oy[i], oy[j]), y = Math.min(a.y, b.y) + 0.006, off = a.x * nx + a.z * nz;
+          var s0 = Math.min(a.x * ux + a.z * uz, b.x * ux + b.z * uz), s1 = Math.max(a.x * ux + a.z * uz, b.x * ux + b.z * uz);
+          [1, -1].forEach(function (k) {
+            if (!sv.hasFloor((a.x + b.x) / 2 + nx * k * 0.3, (a.z + b.z) / 2 + nz * k * 0.3, fy)) return; // 床のある側だけ
+            var key = Math.round(Math.atan2(uz, ux) * 180 / Math.PI) + '|' + Math.round(off * 50) + '|' + Math.round(fy * 50) + '|' + k;
+            (lines[key] = lines[key] || { ux: ux, uz: uz, nx: nx * k, nz: nz * k, off: off, y: y, segs: [] }).segs.push([s0, s1]);
+          });
+        }
+      }
+      var ln = new THREE.LineSegments(new THREE.EdgesGeometry(g, 30), new THREE.LineBasicMaterial({ color: UBLD_LINE, transparent: true, opacity: 0.07, depthWrite: false }));
+      ln.renderOrder = 1; ln.userData.city = 'ubld'; ln.userData.keep = true; ln.userData.soft = 0.3; out.push(ln);
+    });
+    // 同じ直線の上で重なる・接する辺をつなげる
+    var runs = [], grid = {};
+    Object.keys(lines).forEach(function (key) {
+      var L = lines[key], sg = L.segs.sort(function (p, q) { return p[0] - q[0]; }), cur = null;
+      function push() {
+        var r;
+        // 直線の上の点: 位置 = u * s + n0 * off（n0 は符号を付ける前の法線）
+        var n0x = -L.uz, n0z = L.ux, A = { x: L.ux * cur[0] + n0x * L.off, z: L.uz * cur[0] + n0z * L.off }, B = { x: L.ux * cur[1] + n0x * L.off, z: L.uz * cur[1] + n0z * L.off };
+        r = { A: A, B: B, L: L }; runs.push(r);
+        for (var gx = Math.floor(Math.min(A.x, B.x) / 2) - 1; gx <= Math.floor(Math.max(A.x, B.x) / 2) + 1; gx++)
+          for (var gz = Math.floor(Math.min(A.z, B.z) / 2) - 1; gz <= Math.floor(Math.max(A.z, B.z) / 2) + 1; gz++) (grid[gx + ',' + gz] = grid[gx + ',' + gz] || []).push(r);
+      }
+      sg.forEach(function (q) { if (cur && q[0] <= cur[1] + 0.02) cur[1] = Math.max(cur[1], q[1]); else { if (cur) push(); cur = q.slice(); } });
+      if (cur) push();
+    });
+    function cross(p1, p2, q1, q2) {
+      function o(a, b, c) { return (b.x - a.x) * (c.z - a.z) - (b.z - a.z) * (c.x - a.x); }
+      return o(p1, p2, q1) * o(p1, p2, q2) < 0 && o(q1, q2, p1) * o(q1, q2, p2) < 0;
+    }
+    function blocked(r, E, dx, dz) { // 端 E から斜めに広げる所を、ほかの壁の足元の線が横切るか
+      var L = r.L, p1 = { x: E.x - dx * 0.05 + L.nx * 0.05, z: E.z - dz * 0.05 + L.nz * 0.05 }, p2 = { x: E.x + dx * 0.25 + L.nx * 0.25, z: E.z + dz * 0.25 + L.nz * 0.25 };
+      return (grid[Math.floor(E.x / 2) + ',' + Math.floor(E.z / 2)] || []).some(function (q) { return q !== r && Math.abs(q.L.y - L.y) < 0.1 && cross(p1, p2, q.A, q.B); });
+    }
+    runs.forEach(function (r) {
+      var L = r.L, W = 0.5, y = L.y, A = r.A, B = r.B;
+      var A2 = { x: A.x + L.nx * W, z: A.z + L.nz * W }, B2 = { x: B.x + L.nx * W, z: B.z + L.nz * W };
+      sh.push(A.x, y, A.z, B.x, y, B.z, B2.x, y, B2.z, A.x, y, A.z, B2.x, y, B2.z, A2.x, y, A2.z); sa.push(0.2, 0.2, 0, 0.2, 0, 0);
+      [[A, A2, -L.ux, -L.uz], [B, B2, L.ux, L.uz]].forEach(function (d) {
+        if (blocked(r, d[0], d[2], d[3])) return;
+        var E = d[0], E2 = d[1], E3 = { x: E2.x + d[2] * W, z: E2.z + d[3] * W };
+        sh.push(E.x, y, E.z, E2.x, y, E2.z, E3.x, y, E3.z); sa.push(0.2, 0, 0);
+      });
+    });
+    if (sh.length) {
+      var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(sh, 3)); geo.setAttribute('ua', new THREE.Float32BufferAttribute(sa, 1));
+      var mat = new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
+      mat.onBeforeCompile = function (s2) {
+        s2.vertexShader = s2.vertexShader.replace('#include <common>', '#include <common>\nattribute float ua;\nvarying float vUA;').replace('#include <begin_vertex>', '#include <begin_vertex>\nvUA = ua;');
+        s2.fragmentShader = s2.fragmentShader.replace('#include <common>', '#include <common>\nvarying float vUA;').replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.a *= vUA;');
+      };
+      mat.customProgramCacheKey = function () { return 'ubldShadow'; };
+      var m = new THREE.Mesh(geo, mat);
+      m.renderOrder = 1; m.userData.city = 'ubld'; m.userData.keep = true; m.userData.soft = 1; out.push(m);
+    }
+    return out;
   }
   var ubldCache = {}, ubldReal = {}; // ubldReal: 駅 ID → 段のある通路の点の深さ（地下街を表示しているときだけ使う）
   var realY = null; // いま描いている駅で、深さを置き直す点の高さ（点の番号 → 高さ。使わないときは null）
@@ -1486,7 +1653,7 @@ var View3D = (function () {
           }
           o.geometry.setIndex(keepIdx);
         }
-        o.material = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }); // 色は面ごと（ubldColors）
+        o.material = new THREE.MeshBasicMaterial({ color: 0xffffff, vertexColors: true, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false }); // 色は面ごと（ubldColors）
         ubldFloorTiles(o.material);
         o.renderOrder = 1; o.userData.city = 'ubld'; o.userData.keep = true;
       });
@@ -1507,7 +1674,10 @@ var View3D = (function () {
         var p = o.geometry.attributes.position, oy = o.userData.origY;
         for (var k = 0; k < p.count; k++) p.setY(k, depthToY(oy[k] - u.ground, c.pts));
         p.needsUpdate = true; o.geometry.computeVertexNormals(); o.geometry.computeBoundingSphere();
-        ubldColors(o, u.ground);
+      });
+      var sv = ubldSurvey(c.meshes);
+      c.meshes.forEach(function (o) {
+        ubldColors(o, u.ground, sv);
         if (o.parent) o.parent.remove(o);
         o.position.set(0, 0, 0); o.rotation.set(0, 0, 0); o.scale.set(1, 1, 1); o.updateMatrix();
         grp.add(o); netMeshes.push(o);
@@ -1515,8 +1685,7 @@ var View3D = (function () {
       scene.add(grp);
       ubldGroup = grp;
       var ucells = ubldCells(grp);
-      var nose = ubldNosing(c.meshes); // 段のへりの帯（床と壁のます目を数えた後に足す）
-      if (nose) { grp.add(nose); netMeshes.push(nose); }
+      ubldDecor(c.meshes, sv).forEach(function (m) { grp.add(m); netMeshes.push(m); }); // 段のへり・注意帯・接地影・輪郭線（床と壁のます目を数えた後に足す）
       drawVert(ucells);
       if (showSpaces && window.SPACES && SPACES[st.id] && spaceObjs.length) {
         var keep = spacesUnderUbld(SPACES[st.id], ucells);
@@ -1916,7 +2085,7 @@ var View3D = (function () {
   var vertSegs = [], shaftSegs = [], vertObjs = [], fpvStairs = null, flatSegs = [];
   // リアル視点の階段・エスカレーター: 地下街のモデルに無いもの（ホームへ下りる階段など）を、段（踏み面と蹴上げ）と両側の高さ 0.9 m の
   // 壁で描く（2026-10-09 利用者「リアル視点の D2〜1番線、標準、11 の階段が、階段に見えない」。通路網の線をリアル視点で消したので、何も描かれていなかった）
-  function stairGeo(sg, tread, riser, wall, nose) { // nose: あれば段のへりに細い線（幅 6 cm）
+  function stairGeo(sg, tread, riser, wall, nose) { // nose: あれば段のへりに細い線（幅 5 cm）
     var a = sg[0], b = sg[1], top = a.y >= b.y ? a : b, bot = top === a ? b : a;
     var dx = bot.x - top.x, dz = bot.z - top.z, h = Math.hypot(dx, dz), dy = top.y - bot.y;
     if (h < 0.3 || dy < 0.3) return;
@@ -1928,7 +2097,7 @@ var View3D = (function () {
       q(riser, [x0 + sx * W, y0, z0 + sz * W], [x0 - sx * W, y0, z0 - sz * W], [x0 - sx * W, y1, z0 - sz * W], [x0 + sx * W, y1, z0 + sz * W]);
       q(tread, [x0 + sx * W, y1, z0 + sz * W], [x0 - sx * W, y1, z0 - sz * W], [x1 - sx * W, y1, z1 - sz * W], [x1 + sx * W, y1, z1 + sz * W]);
       if (nose && i + 1 < n) { // 次の段へ下りるへり（この段の下の端）に、上から見える細い線
-        var xn = x1 - dx / h * 0.06, zn = z1 - dz / h * 0.06, yn = y1 + 0.006;
+        var xn = x1 - dx / h * 0.05, zn = z1 - dz / h * 0.05, yn = y1 + 0.006;
         q(nose, [xn + sx * W, yn, zn + sz * W], [xn - sx * W, yn, zn - sz * W], [x1 - sx * W, yn, z1 - sz * W], [x1 + sx * W, yn, z1 + sz * W]);
       }
     }
@@ -1948,11 +2117,24 @@ var View3D = (function () {
     vertObjs = [];
     var cMuted = css('--muted'), vert = {}, vertR = {};
     if (fpvStairs) { scene.remove(fpvStairs); fpvStairs = null; }
-    var tread = [], nose = [], riser = [], wall = [];
+    var tread = [], nose = [], riser = [], wall = [], tact = [];
+    // 注意帯（黄色。案 2d）: 階段の上り口の先 30〜60 cm と下り口の手前 5〜35 cm。ほかの階段の端と 2.5 m 以内で続く端（踊り場など）には置かない
+    function lone(pt, self) {
+      return !vertSegs.some(function (o) { return o !== self && [o[0], o[1]].some(function (q) { return Math.hypot(q.x - pt.x, q.z - pt.z) < 2.5 && Math.abs(q.y - pt.y) < 0.3; }); });
+    }
     vertSegs.forEach(function (sg) {
       var a = sg[0], b = sg[1];
       if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }))) return;
       stairGeo(sg, tread, riser, wall, nose);
+      var top = a.y >= b.y ? a : b, bot = top === a ? b : a, hx = bot.x - top.x, hz = bot.z - top.z, hl = Math.hypot(hx, hz);
+      if (hl >= 0.3 && top.y - bot.y >= 0.3) {
+        var ux = hx / hl, uz = hz / hl, wx = -uz, wz = ux;
+        [[top, -0.3, -0.6, lone(top, sg)], [bot, 0.05, 0.35, lone(bot, sg)]].forEach(function (d) {
+          if (!d[3]) return;
+          var e = d[0], y = e.y + 0.012, x0 = e.x + ux * d[1], z0 = e.z + uz * d[1], x1 = e.x + ux * d[2], z1 = e.z + uz * d[2];
+          tact.push(x0 + wx, y, z0 + wz, x0 - wx, y, z0 - wz, x1 - wx, y, z1 - wz, x0 + wx, y, z0 + wz, x1 - wx, y, z1 - wz, x1 + wx, y, z1 + wz);
+        });
+      }
       // 外から見るときも、斜めの帯ではなく段のある形（踏み面と蹴上げ）で描く（2026-10-09 利用者「構内図の階段、エスカレータについて、
       // 斜め線ではなく、段がある絵にできる？」）。高さの差が小さく段が作れないものは前の帯のまま
       var arr = vert[sg[2]] = vert[sg[2]] || [], n0 = arr.length, rs = vertR[sg[2]] = vertR[sg[2]] || [];
@@ -1976,13 +2158,15 @@ var View3D = (function () {
       floor.push(ax + px, y0, az + pz, ax - px, y0, az - pz, bx - px, y1, bz - pz, ax + px, y0, az + pz, bx - px, y1, bz - pz, bx + px, y1, bz + pz);
     });
     var fg = new THREE.Group();
-    // 色は地下街のモデルと同じ（段の上は地下街の階段、蹴上げと壁は地下街の壁、床の板は地下街の床。2026-10-11 構内図と地下街を区別しない）
-    // 段のへりは細い暗い線、両側の壁は細い網目、床の板は床と同じ市松（ufloor。地下街と同じ描き方）
-    [[tread, UBLD_STEP, 0], [nose, UBLD_WALL_DARK, 0], [riser, UBLD_WALL_DARK, 0], [wall, UBLD_WALL_LIGHT, 3], [floor, UBLD_FLOOR, 1]].forEach(function (d) {
+    // 色と描き方は地下街のモデルと同じ（案 2d。踏み面は木の色、蹴上げと両側の壁は白、段のへりは濃い線、床の板は床と同じ目地）。
+    // 両側の壁は段の線（段のへりを結ぶ線）からの高さで、8 cm までを巾木（段の下の三角の所も濃く、ささらのように見える）
+    [[tread, UBLD_STEP, 0], [nose, UBLD_NOSE, 0], [riser, UBLD_WALL, 0], [wall, UBLD_WALL, 3], [floor, UBLD_FLOOR, 1], [tact, UBLD_TACTILE, 0]].forEach(function (d) {
       if (!d[0].length) return;
       var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(d[0], 3)); geo.computeVertexNormals();
-      geo.setAttribute('ufloor', new THREE.Float32BufferAttribute(new Float32Array(d[0].length / 3).fill(d[2]), 1));
-      var mat = new THREE.MeshLambertMaterial({ color: d[1], side: THREE.DoubleSide });
+      var nv = d[0].length / 3;
+      geo.setAttribute('ufloor', new THREE.Float32BufferAttribute(new Float32Array(nv).fill(d[2]), 1));
+      geo.setAttribute('uh', new THREE.Float32BufferAttribute(Float32Array.from({ length: nv }, function (_, k) { return [-0.2, -0.2, 0.9, -0.2, 0.9, 0.9][k % 6]; }), 1)); // 壁の四角（stairGeo の q の順）
+      var mat = new THREE.MeshBasicMaterial({ color: d[1], side: THREE.DoubleSide });
       ubldFloorTiles(mat);
       fg.add(new THREE.Mesh(geo, mat));
     });
@@ -2082,7 +2266,7 @@ var View3D = (function () {
       var ln = lines[lv] = lines[lv] || [];
       rings.forEach(function (r) { r.forEach(function (p, i) { var q = r[(i + 1) % r.length]; ln.push(p.x, y + 0.02, -p.y, q.x, y + 0.02, -q.y); }); });
     });
-    // 構内図の床は、地下街の床と同じ材質・色にする（区別しない）: 床は地下街の床の色（深い階ほど暗く）と約 2 m 角の市松の明暗、
+    // 構内図の床は、地下街の床と同じ材質・色にする（区別しない）: 床は地下街の床の色（深い階ほど暗く）と 60 cm 角の目地（案 2d）、
     // 階段・エスカレーター・エレベーターの範囲は地下街の階段の色。改札内・トイレの部屋も同じ床の色。濃さは地下街と同じつまみ（applyOpacity）
     // （2026-10-11 利用者「駅構内図と地下街の床を同じにしたい。要は、駅構内図と地下街は区別したくない」）
     Object.keys(fills).forEach(function (key) {
@@ -2092,14 +2276,14 @@ var View3D = (function () {
       geo.setAttribute('position', new THREE.Float32BufferAttribute(fills[key], 3));
       geo.setAttribute('ufloor', new THREE.Float32BufferAttribute(new Float32Array(fills[key].length / 3).fill(floor ? 1 : 0), 1));
       geo.computeVertexNormals();
-      var mat = new THREE.MeshLambertMaterial({ color: col, transparent: true, opacity: ubldAlpha, side: THREE.DoubleSide, depthWrite: false });
+      var mat = new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: ubldAlpha, side: THREE.DoubleSide, depthWrite: false });
       ubldFloorTiles(mat);
       var m = new THREE.Mesh(geo, mat);
       m.renderOrder = -1; m.userData.lv = [lv, lv]; m.userData.space = true; netMeshes.push(m); scene.add(m); spaceObjs.push(m);
     });
     Object.keys(lines).forEach(function (lv) {
       var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(lines[lv], 3));
-      var m = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: UBLD_WALL_DARK, transparent: true, opacity: 0.5, depthWrite: false }));
+      var m = new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color: UBLD_NOSE, transparent: true, opacity: 0.5, depthWrite: false }));
       m.userData.base = 0.5; m.userData.lv = [Number(lv), Number(lv)]; m.userData.space = true; m.userData.outline = true; netMeshes.push(m); scene.add(m); spaceObjs.push(m);
     });
   }
@@ -2740,7 +2924,8 @@ var View3D = (function () {
       if (fpv && u.net) b = 0;
       // 地下街: リアル視点か濃さ 100% なら不透明な壁・床・天井として描く（奥が透けない）
       if (u.city === 'ubld' && m.material.userData.hideCeil) m.material.userData.hideCeil.value = fpv ? 0 : 1; // 天井はリアル視点だけ
-      if (u.city === 'ubld') { var uo = b >= 0.999; if (u.fpvMat !== uo) { m.material.transparent = !uo; m.material.depthWrite = uo; m.material.needsUpdate = true; u.fpvMat = uo; } }
+      if (u.soft) b *= u.soft; // 輪郭線（30%）と床の接地影は、いつも半透明で重ねる
+      if (u.city === 'ubld' && !u.soft) { var uo = b >= 0.999; if (u.fpvMat !== uo) { m.material.transparent = !uo; m.material.depthWrite = uo; m.material.needsUpdate = true; u.fpvMat = uo; } }
       m.material.opacity = b;
       m.visible = b > 0.003;
     });
