@@ -2713,7 +2713,7 @@ var View3D = (function () {
       wc.position.set(t[0], ty - 0.35, -t[1]); labels.push(wc); scene.add(wc);
     });
 
-    // ホーム: 乗るホームは8両分に区切り、乗る位置の車両を塗る
+    // ホーム: 乗るホームを8両分に分け、乗る位置の車両だけを塗る
     platAxis = null;
     st.plats.forEach(function (p) {
       var axis = new THREE.Vector3(p.ax, 0, -p.ay), len = p.max - p.min, tm = (p.min + p.max) / 2;
@@ -2724,8 +2724,11 @@ var View3D = (function () {
       var cl = len / Guide.CARS;
       for (var c = 1; c <= Guide.CARS; c++) {
         var t = p.max - (c - 0.5) * cl, hl = c === g.boardCar;
+        // 乗る車両だけを塗る。ほかの 7 両分の灰色の半透明の箱は描かない（2026-10-11 利用者「駅のホーム付近にある半透明の床。これなんだっけ？」→「乗る車両だけを塗る」。
+        // 床・壁・階段の描き方（案 2d）の中で浮いて見えた）
+        if (!hl) continue;
         var m = new THREE.Mesh(new THREE.BoxGeometry(cl - 1.2, 0.8, 7),
-          new THREE.MeshBasicMaterial({ color: hl ? cOedo : cMuted, transparent: true, opacity: hl ? 0.85 : 0.22, depthWrite: false }));
+          new THREE.MeshBasicMaterial({ color: cOedo, transparent: true, opacity: 0.85, depthWrite: false }));
         m.position.set(p.cx + p.ax * t, y, -(p.cy + p.ay * t));
         m.rotation.y = rotY;
         scene.add(m);
