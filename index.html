@@ -2369,6 +2369,87 @@ var View3D = (function () {
     if (keep >= 0) highlight(keep);
   }
 
+  // ホームの線路の側: 国土交通省の構内図（SPACES）のその階の床の形で、乗車位置の並び（ホームの軸）から左右へ 20 cm ずつ進み、床が途切れて、
+  // その先 1.5 m・3 m にも床が無い側を線路とみる（ホームの 5 か所で調べ、3 か所以上そろう側。途切れるまでの距離は中央値）。分からなければ null
+  function trainSide(st, p) {
+    var list = window.SPACES && SPACES[st.id];
+    if (!list) return null;
+    var polys = list.filter(function (sp) { return Math.abs(sp[0] - p.level) < 0.6; });
+    if (!polys.length) return null;
+    function inRing(x, y, r) {
+      var c = false;
+      for (var i = 0, j = r.length / 2 - 1; i < r.length / 2; j = i++) {
+        var xi = r[2 * i], yi = r[2 * i + 1], xj = r[2 * j], yj = r[2 * j + 1];
+        if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) c = !c;
+      }
+      return c;
+    }
+    function inside(x, n) { return polys.some(function (sp) { return inRing(x, n, sp[3]) && !sp.slice(4).some(function (h) { return inRing(x, n, h); }); }); }
+    var px = -p.ay, py = p.ax, best = null;
+    [1, -1].forEach(function (s) {
+      var es = [];
+      [0.2, 0.35, 0.5, 0.65, 0.8].forEach(function (f) {
+        var t = p.min + (p.max - p.min) * f, bx = p.cx + p.ax * t, by = p.cy + p.ay * t;
+        for (var d = 0; d <= 8; d += 0.2) {
+          if (inside(bx + px * s * d, by + py * s * d)) continue;
+          if (d > 0 && !inside(bx + px * s * (d + 1.5), by + py * s * (d + 1.5)) && !inside(bx + px * s * (d + 3), by + py * s * (d + 3))) es.push(d);
+          break;
+        }
+      });
+      if (es.length < 3) return;
+      es.sort(function (a, b) { return a - b; });
+      var e = es[es.length >> 1];
+      if (!best || es.length > best.n || (es.length === best.n && e < best.e)) best = { s: s, e: e, n: es.length };
+    });
+    return best;
+  }
+  // 電車の絵: 大江戸線の車両（幅 2.5 m の小さな車体）を 8 両、ホームの線路の側に並べる。銀色の車体に路線色の帯、窓、片側 3 か所のドア
+  // （乗る車両のドアは薄い路線色）、先頭と最後尾の前面窓、輪郭線。色は面の向きの明るさ（ubldFloorTiles、地下街と同じ）。yF はホームの床の高さ
+  function trainMeshes(st, p, yF, boardCar, cOedo) {
+    var side = trainSide(st, p);
+    if (!side) return [];
+    var W = 2.5, vc = side.s * (side.e + 0.15 + W / 2), px = -p.ay, py = p.ax, cl = (p.max - p.min) / Guide.CARS;
+    var body = [], band = [], win = [], door = [], doorB = [];
+    function P(u, v, y) { return [p.cx + p.ax * u + px * v, y, -(p.cy + p.ay * u + py * v)]; }
+    function quad(arr, a, b, c, d) { arr.push.apply(arr, a.concat(b, c, a, c, d)); }
+    function box(arr, u0, u1, v0, v1, y0, y1) {
+      var c = [P(u0, v0, y0), P(u1, v0, y0), P(u1, v1, y0), P(u0, v1, y0), P(u0, v0, y1), P(u1, v0, y1), P(u1, v1, y1), P(u0, v1, y1)];
+      [[0, 1, 2, 3], [4, 5, 6, 7], [0, 1, 5, 4], [1, 2, 6, 5], [2, 3, 7, 6], [3, 0, 4, 7]].forEach(function (f) { quad(arr, c[f[0]], c[f[1]], c[f[2]], c[f[3]]); });
+    }
+    function sideRect(arr, k, u0, u1, y0, y1) { var v = vc + k * (W / 2 + 0.015); quad(arr, P(u0, v, y0), P(u1, v, y0), P(u1, v, y1), P(u0, v, y1)); }
+    function endRect(arr, u, v0, v1, y0, y1) { quad(arr, P(u, vc + v0, y0), P(u, vc + v1, y0), P(u, vc + v1, y1), P(u, vc + v0, y1)); }
+    var bodies = [];
+    for (var c = 1; c <= Guide.CARS; c++) {
+      var tc = p.max - (c - 0.5) * cl, u0 = tc - cl / 2 + 0.3, u1 = tc + cl / 2 - 0.3, L = u1 - u0, b0 = [];
+      box(b0, u0, u1, vc - W / 2, vc + W / 2, yF - 0.95, yF + 2.2);
+      body.push.apply(body, b0); bodies.push(b0);
+      [1, -1].forEach(function (k) {
+        sideRect(band, k, u0, u1, yF + 0.55, yF + 0.72); // 路線色の帯
+        var ds = [0.18, 0.5, 0.82].map(function (f) { return u0 + L * f; }), edges = [u0 + 0.6].concat(ds.reduce(function (a, d) { return a.concat([d - 0.85, d + 0.85]); }, []), [u1 - 0.6]);
+        for (var i = 0; i + 1 < edges.length; i += 2) if (edges[i + 1] - edges[i] > 0.3) sideRect(win, k, edges[i], edges[i + 1], yF + 0.95, yF + 1.75); // 窓（ドアのあいだ）
+        ds.forEach(function (d) {
+          sideRect(c === boardCar ? doorB : door, k, d - 0.65, d + 0.65, yF + 0.02, yF + 1.85); // ドア
+          var v = vc + k * (W / 2 + 0.03);
+          [[d - 0.5, d - 0.1], [d + 0.1, d + 0.5]].forEach(function (w) { quad(win, P(w[0], v, yF + 1.0), P(w[1], v, yF + 1.0), P(w[1], v, yF + 1.7), P(w[0], v, yF + 1.7)); }); // ドアの窓
+        });
+      });
+      if (c === 1) endRect(win, u1 + 0.015, -0.95, 0.95, yF + 0.9, yF + 1.8); // 先頭の前面窓
+      if (c === Guide.CARS) endRect(win, u0 - 0.015, -0.95, 0.95, yF + 0.9, yF + 1.8);
+    }
+    var out = [];
+    [[body, 0xe3e6ea], [band, cOedo], [win, 0x2f3440], [door, 0xc9cdd4], [doorB, 0xf2bfd0]].forEach(function (d) {
+      if (!d[0].length) return;
+      var geo = new THREE.BufferGeometry(); geo.setAttribute('position', new THREE.Float32BufferAttribute(d[0], 3));
+      geo.setAttribute('ufloor', new THREE.Float32BufferAttribute(new Float32Array(d[0].length / 3), 1));
+      var mat = new THREE.MeshBasicMaterial({ color: d[1], side: THREE.DoubleSide, transparent: true, opacity: 1 });
+      ubldFloorTiles(mat);
+      out.push(new THREE.Mesh(geo, mat));
+    });
+    var lg = new THREE.BufferGeometry(); lg.setAttribute('position', new THREE.Float32BufferAttribute(body, 3));
+    var ln = new THREE.LineSegments(new THREE.EdgesGeometry(lg, 30), new THREE.LineBasicMaterial({ color: UBLD_LINE, transparent: true, opacity: 0.5, depthWrite: false }));
+    ln.userData.base = 0.5; out.push(ln);
+    return out;
+  }
   function ribbonMesh(pos, color, opacity) {
     var geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -2739,6 +2820,10 @@ var View3D = (function () {
           lb.position.set(m.position.x, y - 0.5, m.position.z); scene.add(lb);
         }
       }
+      // 電車（8 両）を線路の側に描く（2026-10-11 利用者「目的地がホームの場合、その場所に電車の絵を表示することはできる？」）
+      trainMeshes(st, p, levelY(p.level) - 0.35, g.boardCar, cOedo).forEach(function (o) {
+        o.userData.lv = [p.level, p.level]; o.userData.base = o.userData.base || 1; netMeshes.push(o); scene.add(o);
+      });
       // 進行方向
       var front = new THREE.Vector3(p.cx + p.ax * p.max, y + 1, -(p.cy + p.ay * p.max));
       scene.add(new THREE.ArrowHelper(axis, front, 16, new THREE.Color(cInk).getHex(), 5, 3.5));
