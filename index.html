@@ -1914,7 +1914,39 @@ var View3D = (function () {
     fpvSigns = grp; scene.add(grp);
   }
   // 区間をたどる: i が手順の番号（出発・到着は、その場所で止まって前を見る）、-1 なら経路全体
-  function playU() { return play ? Math.max(0, Math.min(1, (performance.now() - play.s) / play.d)) : null; }
+  function playU() { return play ? uOf(play.tl, performance.now() - play.s) : null; }
+  // 自動で歩くときの時間と線の上の割合 u の対応。ふつうは道のりに比例（dNat ミリ秒で ua〜ub）、改札を通る手順の区間だけは最低 2 秒かけて
+  // ゆっくり通る（2026-10-11 利用者「改札を通る工程は、2秒表示して」。改札の通路は数 m しかなく、一瞬で次の手順に替わっていた）
+  var GATE_MS = 2000;
+  function walkTimeline(ua, ub, dNat) {
+    var cuts = [ua, ub], gates = [];
+    if (lastArgs) lastArgs[1].steps.forEach(function (st0, i) {
+      if (st0.kind !== 'gate') return;
+      var r = stepRangeU(i);
+      if (!r || r[1] <= ua || r[0] >= ub) return;
+      var a = Math.max(ua, r[0]), b = Math.min(ub, r[1]);
+      gates.push([a, b, r[0], r[1]]); cuts.push(a, b);
+    });
+    cuts.sort(function (x, y) { return x - y; });
+    var segs = [], t = 0;
+    for (var k = 0; k + 1 < cuts.length; k++) {
+      var u0 = cuts[k], u1 = cuts[k + 1];
+      if (u1 - u0 < 1e-9) continue;
+      var d = ub > ua ? dNat * (u1 - u0) / (ub - ua) : 0;
+      gates.forEach(function (g) { if (u0 >= g[0] - 1e-9 && u1 <= g[1] + 1e-9 && g[3] > g[2]) d = Math.max(d, GATE_MS * (u1 - u0) / (g[3] - g[2])); });
+      segs.push({ u0: u0, u1: u1, t0: t, t1: t + d }); t += d;
+    }
+    return { segs: segs, d: Math.max(1, t), ua: ua, ub: ub };
+  }
+  function uOf(tl, t) {
+    if (t <= 0) return tl.ua;
+    for (var k = 0; k < tl.segs.length; k++) { var g = tl.segs[k]; if (t <= g.t1) return g.u0 + (g.u1 - g.u0) * (g.t1 > g.t0 ? (t - g.t0) / (g.t1 - g.t0) : 1); }
+    return tl.ub;
+  }
+  function tOf(tl, u) {
+    for (var k = 0; k < tl.segs.length; k++) { var g = tl.segs[k]; if (u <= g.u1) return g.t0 + (g.t1 - g.t0) * (g.u1 > g.u0 ? Math.max(0, u - g.u0) / (g.u1 - g.u0) : 0); }
+    return tl.d;
+  }
   // 手順 i の始まりの位置（経路全体の線の上の割合）。出発・到着など線の無い手順は null
   function stepStartU(i) { var r = stepRangeU(i); return r ? r[0] : null; }
   function stepRangeU(i) {
@@ -1938,12 +1970,13 @@ var View3D = (function () {
       if (fixedU === null && startU > u0 && startU < u1) { u0 = startU; resumeU = null; }
     } else if (startU > 0 && startU < 1) u0 = startU; // 続きから
     // u（いまの位置）は最初から入れておく。描く前（読み込み中・裏のタブ）に止めると、空の位置で止まって毎フレーム失敗していた
-    fpvWalk = { curve: routeCurve, len: total, u0: u0, u1: u1, u: fixedU !== null ? fixedU : u0, s: performance.now(), d: fixedU !== null ? 1 : Math.max(2500, (u1 - u0) * total / 2.4 * 1000), fixedU: fixedU, whole: i < 0 };
+    var wtl = walkTimeline(u0, u1, fixedU !== null ? 1 : Math.max(2500, (u1 - u0) * total / 2.4 * 1000));
+    fpvWalk = { curve: routeCurve, len: total, u0: u0, u1: u1, u: fixedU !== null ? fixedU : u0, s: performance.now(), d: wtl.d, tl: wtl, fixedU: fixedU, whole: i < 0 };
     fpvLook = null; lastPlayStep = -1;
   }
   function updateFpv(now) {
     if (!fpvWalk) return;
-    var w = fpvWalk, u = w.fixedU != null ? w.fixedU : w.u0 + (w.u1 - w.u0) * Math.min(1, (now - w.s) / w.d);
+    var w = fpvWalk, u = w.fixedU != null ? w.fixedU : uOf(w.tl, now - w.s);
     if (!isFinite(u)) u = w.u0 || 0;
     w.u = u; // 到着のピンの濃さに使う（残りの道のり）
     if (fpvSigns) fpvSigns.children.forEach(function (c) { if (c.userData.wc) c.visible = c.position.distanceTo(camera.position) < 40; }); // 遠いトイレは出さない
@@ -2305,6 +2338,9 @@ var View3D = (function () {
       var a = sg[0], b = sg[1], ax = a.x, an = -a.z, dx = b.x - ax, dn = -b.z - an, L2 = dx * dx + dn * dn;
       var t = L2 ? Math.max(0, Math.min(1, ((x - ax) * dx + (n - an) * dn) / L2)) : 0;
       var py = a.y + (b.y - a.y) * t;
+      // その床から下りていく（か、その床を突き抜ける）線だけ: 上の端がその床の高さ（60 cm 下まで）より上。真下を通るだけの下の階の階段では
+      // 抜かない（2026-10-11 利用者「都庁前、上の床が一部不自然に消されているけどどうして？」→「その案で直して」）
+      if (Math.max(a.y, b.y) < yf - 0.6) return false;
       return Math.hypot(ax + dx * t - x, an + dn * t - n) < r && py < yf - dy && py > yf - lo;
     });
   }
@@ -3038,7 +3074,8 @@ var View3D = (function () {
     if (kind === 'play') {
       // 実際にかかる時間の 5 倍速（大門 A3 → 4 番線の約 5 分なら約 60 秒）。最短 15 秒。止めた所があれば続きから
       var realSec = lastArgs ? lastArgs[1].minutes * 60 : total, pd = Math.max(15000, realSec * 1000 / 5);
-      play = { s: performance.now() - (resumeU || 0) * pd, d: pd }; playDir = null;
+      var ptl = walkTimeline(0, 1, pd);
+      play = { s: performance.now() - tOf(ptl, resumeU || 0), d: ptl.d, tl: ptl }; playDir = null;
       return;
     }
     moveTo(viewPos(kind), home.center.clone(), instant);
@@ -3067,8 +3104,11 @@ var View3D = (function () {
       else if (u.stair) b = ubldAlpha >= 0.999 ? 1 : Math.min(1, u.base * ubldAlpha / 0.22);
       else b = u.base;
       if (sel) {
-        // いま歩いている階は濃く、ほかの階は薄く
-        if (u.lv) b = (u.lv[1] >= sel.lo - 0.01 && u.lv[0] <= sel.hi + 0.01) ? Math.min(1, b * 1.6) : b * 0.25;
+        // いま歩いている階は濃く、ほかの階は薄く。中間の階（-0.5 など半端な階。折り返す階段の踊り場）の手順では、上下の整数の階も
+        // いまの階とみる（構内図の床は整数の階にしか無く、中間の階の通路のまわりの床が薄くなっていた。2026-10-11 利用者「都庁前、A3から
+        // 下に移動するルートの床が何カ所か半透明になっている。改善できない？」）
+        var slo = Math.floor(sel.lo + 0.01), shi = Math.ceil(sel.hi - 0.01);
+        if (u.lv) b = (u.lv[1] >= slo - 0.01 && u.lv[0] <= shi + 0.01) || (u.space && sel.underLv && sel.underLv.indexOf(u.lv[0]) >= 0) ? Math.min(1, b * 1.6) : b * 0.25;
         // 案内中は建物を消す（経路に被らないように）。道路は地上にかかる手順だけ、場所の手がかりとして薄く残す
         else if (u.city === 'ubld') b = fpv ? 1 : ubldAlpha * 0.55; // 地下街は案内中も、地下の空間の手がかりとして薄く残す（中から見るときは透明にしない）
         else b = (u.city === 'road' && sel.hi > -0.01) ? b * 0.35 : 0; // 写真の街並み（建物・航空写真）は案内中はすべて消す
@@ -3090,11 +3130,34 @@ var View3D = (function () {
     });
   }
 
+  // 手順の通路の真下にある構内図の床の階（手順の階から 1.6 階以内）。構内図と通路網で階の番号がずれている所（国立競技場の地下1階の通路が
+  // 構内図では地下2階の床の上、など）でも、その床をいまの階として濃く出す（2026-10-11 利用者「他にも半透明床が確認できる。改善できるなら改善してほしい」）
+  function floorsUnder(curve, lo, hi) {
+    var list = curSt && window.SPACES && SPACES[curSt.id], out = [];
+    if (!list) return out;
+    function inRing(x, y, r) {
+      var c = false;
+      for (var a = 0, b = r.length / 2 - 1; a < r.length / 2; b = a++) {
+        var xa = r[2 * a], ya = r[2 * a + 1], xb = r[2 * b], yb = r[2 * b + 1];
+        if ((ya > y) !== (yb > y) && x < (xb - xa) * (y - ya) / (yb - ya) + xa) c = !c;
+      }
+      return c;
+    }
+    curve.getPoints(24).forEach(function (p) {
+      list.forEach(function (sp) {
+        var lv = sp[0];
+        if (out.indexOf(lv) >= 0 || lv < lo - 1.6 || lv > hi + 1.6) return;
+        if (inRing(p.x, -p.z, sp[3]) && !sp.slice(4).some(function (h) { return inRing(p.x, -p.z, h); })) out.push(lv);
+      });
+    });
+    return out;
+  }
   function highlight(i) {
     var t = segTubes.filter(function (s) { return s.userData.step === i; })[0];
     segTubes.forEach(function (s) { s.visible = s === t && !fpv; });
     sel = null;
     if (t) sel = { i: i, lo: t.userData.lo, hi: t.userData.hi, curve: t.userData.curve, ring: t.userData.vert ? t.userData.start : null, tubeTex: t.userData.tubeTex, walker: t.userData.walker, walkCurve: t.userData.walkCurve };
+    if (sel && sel.curve) sel.underLv = floorsUnder(sel.curve, sel.lo, sel.hi);
     else if (i >= 0 && lastArgs && routePts.length) {
       // 出発・到着の手順は、その場所に波紋だけ出す
       var g = lastArgs[1], last = g.steps.length - 1;
@@ -3228,7 +3291,7 @@ var View3D = (function () {
     if (routeCurve && dot) {
       var u;
       if (play) {
-        u = Math.min(1, (now - play.s) / play.d);
+        u = uOf(play.tl, now - play.s);
         var p = routeCurve.getPointAt(u);
         // 進む向きと傾きは、その瞬間の線の向きではなく、前後約 10 m の点から求め、さらに時間をかけてゆっくり追う
         // （短い折れ曲がりが続く所で向きが細かく振れ、視点がふらついていた。2026-10-08 利用者「矢印の自動案内を見てると視点がふらつくところがある」）
