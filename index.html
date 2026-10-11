@@ -2092,13 +2092,9 @@ var View3D = (function () {
       var hlen = function (k) { return Math.hypot(P[k + 1].x - P[k].x, P[k + 1].z - P[k].z); };
       var isSt = function (k) { return k < E.length && (E[k].mode === 2 || E[k].mode === 4) && Math.abs(P[k].y - P[k + 1].y) >= 0.1 && (P[k].y > P[k + 1].y) === dn; };
       var isFl = function (k) { return k < E.length && E[k].mode !== 2 && E[k].mode !== 4 && E[k].mode !== 5 && Math.abs(P[k].y - P[k + 1].y) < 0.1; };
-      for (;;) {
-        if (isSt(j0 + 1)) { j0++; nst++; continue; }
-        var k1 = j0 + 1, flen = 0;
-        while (isFl(k1) && flen + hlen(k1) <= 6) { flen += hlen(k1); k1++; }
-        if (k1 > j0 + 1 && isSt(k1)) { j0 = k1; nst++; continue; }
-        break;
-      }
+      // 踊り場を挟む階段はまとめない（1 本ずつ伸ばして、階段と踊り場のジグザグにする。まとめて 1 本の斜めの線にしたら、利用者「添付の右図のように
+      // ジグザグになればいいのでは？」）
+      while (isSt(j0 + 1)) { j0++; nst++; }
       if (nst > 1) {
         var stairH = function () { var s = 0; for (var k = i0; k <= j0; k++) if (isSt0[k]) s += hlen(k); return s; };
         var isSt0 = {}; for (var k0 = i0; k0 <= j0; k0++) isSt0[k0] = (E[k0].mode === 2 || E[k0].mode === 4) && Math.abs(P[k0].y - P[k0 + 1].y) >= 0.1;
@@ -2125,6 +2121,28 @@ var View3D = (function () {
       var left = shiftAlong(P, down ? i : i + 1, down ? -1 : 1, extra);
       if (left > 0.3) shiftAlong(P, down ? i + 1 : i, down ? 1 : -1, left);
     });
+  }
+  // 伸ばしても 40 度より急な階段は、その場で折り返すジグザグ（奇数本の階段と、横へ 1.6 m ずれる短い踊り場）に折りたたんで描く。
+  // 階段 1 本の水平の長さはそのまま、本数を 35 度になるだけ増やす（見た目だけ。データ・案内文は変えない）。辺の番号 → あいだに入れる点の並び
+  // （2026-10-11 利用者「では、折り返しのルート案内にできる？今のままだとほぼ垂直に落ちる感じなので」「添付の右図のようにジグザグになればいいのでは？」）
+  function foldStairs(P, E) {
+    var via = {}, MAXT = Math.tan(40 * Math.PI / 180);
+    E.forEach(function (ed, i) {
+      if (ed.mode !== 2) return; // 階段だけ（エスカレーターは折り返さない）
+      var a = P[i], b = P[i + 1], dv = a.y - b.y, adv = Math.abs(dv), hx = b.x - a.x, hz = b.z - a.z, h = Math.hypot(hx, hz);
+      if (adv < 0.5 || h < 1 || adv / h <= MAXT) return;
+      var n = Math.max(3, Math.ceil(adv / STAIR_TAN / h));
+      if (n % 2 === 0) n++;
+      var ux = hx / h, uz = hz / h, wx = -uz * 1.6, wz = ux * 1.6, pts = [], y = a.y;
+      for (var k = 0; k < n - 1; k++) {
+        var fwd = k % 2 === 0, lat = fwd ? 0 : 1, ex = fwd ? b.x : a.x, ez = fwd ? b.z : a.z;
+        y -= dv / n;
+        pts.push(new THREE.Vector3(ex + wx * lat, y, ez + wz * lat)); // 階段の終わり
+        pts.push(new THREE.Vector3(ex + wx * (1 - lat), y, ez + wz * (1 - lat))); // 踊り場で横へ
+      }
+      via[i] = pts;
+    });
+    return via;
   }
   // 点 k を、同じ階の通路に沿って dir の向きへ amount だけずらす（通り過ぎた点はずらした先にまとめる）。ずらしきれなかった残りを返す
   function shiftAlong(P, k, dir, amount) {
@@ -2807,13 +2825,16 @@ var View3D = (function () {
     g.route.edges.forEach(function (ed, i) { edgeIdx.set(ed, i); disp.push(V(st, ed.b, 0.8)); });
     buildStairSpan(st);
     easeStairs(disp, g.route.edges);
+    var fold = foldStairs(disp, g.route.edges); // 折りたたんだ階段のあいだの点（辺の番号 → 点の並び。表示の高さ）
+    function viaOf(ed) { var k = edgeIdx.get(ed); return k != null && fold[k] ? fold[k].map(function (v) { return v.clone(); }) : []; }
     routeDisp = disp; routeEdges = g.route.edges; ubldGroup = null; fpvSigns = null; // 中から見るときの案内板用
     function dispA(ed) { return edgeIdx.has(ed) ? disp[edgeIdx.get(ed)].clone() : V(st, ed.a, 0.8); }
     function dispB(ed) { return edgeIdx.has(ed) ? disp[edgeIdx.get(ed) + 1].clone() : V(st, ed.b, 0.8); }
     g.route.edges.forEach(function (ed, i) {
       if (ed.mode !== 2 && ed.mode !== 4) return;
       var pa = disp[i].clone(), pb = disp[i + 1].clone(); pa.y -= 0.8; pb.y -= 0.8;
-      routeVert[ed.a + '-' + ed.b] = [pa, pb]; routeVert[ed.b + '-' + ed.a] = [pb, pa];
+      var vv = (fold[i] || []).map(function (v) { var q = v.clone(); q.y -= 0.8; return q; });
+      routeVert[ed.a + '-' + ed.b] = [pa, pb, vv]; routeVert[ed.b + '-' + ed.a] = [pb, pa, vv.slice().reverse()];
     });
 
     // 通路網（データ全体）
@@ -2862,6 +2883,15 @@ var View3D = (function () {
       if (!isV && mapPolys && linkOnMap(l)) return;
       if (isV) {
         var rv = routeVert[l[0] + '-' + l[1]];
+        if (rv && rv[2] && rv[2].length) { // 折りたたんだ階段: 階段の本ごとに段、あいだの踊り場は床の板
+          var seq = [rv[0]].concat(rv[2], [rv[1]]);
+          for (var q2 = 0; q2 + 1 < seq.length; q2++) {
+            var p1 = seq[q2], p2 = seq[q2 + 1];
+            if (Math.abs(p1.y - p2.y) > 0.1) vertSegs.push([p1.clone(), p2.clone(), key, true]);
+            else flatSegs.push([p1.clone(), p2.clone(), za + (zb - za) * (p1.y - rv[0].y) / ((rv[1].y - rv[0].y) || 1)]);
+          }
+          return;
+        }
         if (rv) { a = rv[0]; b = rv[1]; } else easeLink(a, b, l[0], l[1]);
         dx = b.x - a.x; dz = b.z - a.z; hl = Math.hypot(dx, dz); if (hl < 0.3) return;
         vertSegs.push([a.clone(), b.clone(), key, !!rv]); // 階段・エスカレーターは drawVert で（地下街と重なるものを後で除けるように）。4 番目: 経路が通る
@@ -3017,9 +3047,11 @@ var View3D = (function () {
     g.segs.forEach(function (s, k) { s.edges.forEach(function (e) { stepOfEdge.set(e, k + 1); }); });
     var lastStep = 1;
     E.forEach(function (e) {
-      var p = dispB(e), d = p.distanceTo(pts[pts.length - 1]);
       var k = stepOfEdge.has(e) ? stepOfEdge.get(e) : lastStep; lastStep = k;
-      if (d > 0.05) { pts.push(p); total += d; edgeCum.push(total); edgeStep.push(k); }
+      viaOf(e).concat([dispB(e)]).forEach(function (p) { // 折りたたんだ階段は、あいだの点も通る
+        var d = p.distanceTo(pts[pts.length - 1]);
+        if (d > 0.05) { pts.push(p); total += d; edgeCum.push(total); edgeStep.push(k); }
+      });
     });
     if (pts.length < 2) pts.push(pts[0].clone().add(new THREE.Vector3(0.1, 0, 0)));
     routeCurve = polyCurve(pts);
@@ -3035,7 +3067,7 @@ var View3D = (function () {
     g.segs.forEach(function (s, k) {
       // 手順から省いた短い通路（s.lead）も帯に含め、前の手順の帯とつなげる
       var all = (s.lead || []).concat(s.edges);
-      var sp = dedupe([dispA(all[0])].concat(all.map(function (e) { return dispB(e); })));
+      var sp = dedupe([dispA(all[0])].concat.apply([dispA(all[0])], all.map(function (e) { return viaOf(e).concat([dispB(e)]); })));
       if (sp.length < 2) return;
       var curve = polyCurve(sp), n = Math.min(800, sp.length * 12);
       var grp = new THREE.Group();
