@@ -2802,14 +2802,19 @@ var View3D = (function () {
         vertSegs.push([a.clone(), b.clone(), key, !!rv]); // 階段・エスカレーターは drawVert で（地下街と重なるものを後で除けるように）。4 番目: 経路が通る
         return;
       }
-      flatSegs.push([a.clone(), b.clone(), za]); // 床の板（構内図・地下街の床の無い所）
-      var w = 2.6, px = -dz / hl * w / 2, pz = dx / hl * w / 2;
+      // 構内図・地下街の床の無い所の通路: 平らな線とゆるい坂（傾き 30% まで）は床の板（構内図の床と同じ描き方）だけにし、通路網の帯は描かない。
+      // それより急な線（平らな通路なのに階をまたぐ元データの線）は、細い帯（幅 0.8 m、濃さは階段と同じつまみ）にする
+      // （灰色の半透明の帯（濃さ 32% のまま）が重なり、煙のような面に見えていた。2026-10-11 利用者が国立競技場の画面で指摘）
+      if (Math.abs(a.y - b.y) <= 0.3 * hl) { flatSegs.push([a.clone(), b.clone(), za]); return; }
+      var w = 0.8, px = -dz / hl * w / 2, pz = dx / hl * w / 2;
       (pass[key] = pass[key] || []).push(a.x + px, a.y, a.z + pz, a.x - px, a.y, a.z - pz, b.x + px, b.y, b.z + pz,
         a.x - px, a.y, a.z - pz, b.x - px, b.y, b.z - pz, b.x + px, b.y, b.z + pz);
     });
     Object.keys(pass).forEach(function (key) {
-      var m = ribbonMesh(pass[key], cWalk, 0.32);
-      m.userData.base = 0.32; m.userData.lv = key.split(':').map(Number); m.userData.net = true; netMeshes.push(m); scene.add(m);
+      var m = ribbonMesh(pass[key], UBLD_FLOOR_DARK, 0.5);
+      m.geometry.setAttribute('ufloor', new THREE.Float32BufferAttribute(new Float32Array(pass[key].length / 3), 1));
+      ubldFloorTiles(m.material);
+      m.userData.base = 0.5; m.userData.lv = key.split(':').map(Number); m.userData.net = true; m.userData.stair = true; netMeshes.push(m); scene.add(m);
     });
     shaftSegs = shafts;
     drawVert(null);
