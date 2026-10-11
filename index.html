@@ -2124,11 +2124,19 @@ var View3D = (function () {
       q(wall, [tx, top.y - 0.2, tz], [bx, bot.y - 0.2, bz], [bx, bot.y + 0.9, bz], [tx, top.y + 0.9, tz]);
     });
   }
-  function coveredBy(cells, pts) {
+  // strict: 階段・エスカレーターの線用。その点の高さの前後 60 cm に地下街の水平な面（段・床）があるときだけ重なるとみる。前は上下 2 m 以内に
+  // 面があればよく、地下街の床の下を通る（地下街に無い）階段まで描かずにいた（2026-10-11 利用者「新宿西口、D5~1番線、標準、案内12番を
+  // 次へで移動すると、上側の階段が表示されない」。地下3階→中間の階の階段の上に地下街の地下3階の床があった）
+  function coveredBy(cells, pts, strict) {
     var hit = 0;
-    pts.forEach(function (p) { var cl = cells[Math.floor(p.x / 2) + ',' + Math.floor(p.z / 2)]; if (cl && p.y >= cl[0] - 2 && p.y <= cl[1] + 2) hit++; });
+    pts.forEach(function (p) {
+      var cl = cells[Math.floor(p.x / 2) + ',' + Math.floor(p.z / 2)];
+      if (!cl) return;
+      if (strict ? cl[2].some(function (h) { return Math.abs(p.y - h) < 0.6; }) : p.y >= cl[0] - 2 && p.y <= cl[1] + 2) hit++;
+    });
     return hit >= 2;
   }
+
   function drawVert(cells) {
     vertObjs.forEach(function (m) { scene.remove(m); var k = netMeshes.indexOf(m); if (k >= 0) netMeshes.splice(k, 1); });
     vertObjs = [];
@@ -2141,7 +2149,7 @@ var View3D = (function () {
     }
     vertSegs.forEach(function (sg) {
       var a = sg[0], b = sg[1];
-      if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }))) return;
+      if (cells && coveredBy(cells, [0.25, 0.5, 0.75].map(function (t) { return a.clone().lerp(b, t); }), true)) return;
       stairGeo(sg, tread, riser, wall, nose);
       var nT = tact.length;
       var top = a.y >= b.y ? a : b, bot = top === a ? b : a, hx = bot.x - top.x, hz = bot.z - top.z, hl = Math.hypot(hx, hz);
@@ -2219,7 +2227,11 @@ var View3D = (function () {
   }
   function ubldCells(grp) {
     var cells = {}, C = 2, a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), e1 = new THREE.Vector3(), e2 = new THREE.Vector3();
-    function mark(ix, iz, y) { var k = ix + ',' + iz, r = cells[k]; if (!r) cells[k] = [y, y]; else { r[0] = Math.min(r[0], y); r[1] = Math.max(r[1], y); } }
+    function mark(ix, iz, y) { // [一番低い面, 一番高い面, 面の高さの一覧]
+      var k = ix + ',' + iz, r = cells[k];
+      if (!r) cells[k] = [y, y, [y]];
+      else { r[0] = Math.min(r[0], y); r[1] = Math.max(r[1], y); if (!r[2].some(function (h) { return Math.abs(h - y) < 0.05; })) r[2].push(y); }
+    }
     function inTri(x, z) {
       var d1 = (x - b.x) * (a.z - b.z) - (a.x - b.x) * (z - b.z), d2 = (x - c.x) * (b.z - c.z) - (b.x - c.x) * (z - c.z), d3 = (x - a.x) * (c.z - a.z) - (c.x - a.x) * (z - a.z);
       return !((d1 < 0 || d2 < 0 || d3 < 0) && (d1 > 0 || d2 > 0 || d3 > 0));
