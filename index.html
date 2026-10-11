@@ -2078,7 +2078,32 @@ var View3D = (function () {
     return Math.max(span || 0, h, dv / STAIR_TAN);
   }
   function easeStairs(P, E) {
+    // 平らな所を挟まずに続く階段（同じ向きに 2 本以上）は、ひとまとまりで 35 度にする: 前後の同じ階の通路を借りて全体を伸ばし、途中の点の
+    // 高さを水平の長さに比例させる（見た目だけ。元のデータは変えない）。前は 1 本ずつ伸ばしていたので、あいだの短い 1 本（国立競技場の地下2階→
+    // 地下3階の水平 1.4 m の階段）は伸ばせず、ほぼ垂直になっていた（2026-10-11 利用者「国立競技場の極端な階段はどうにかできないの？」）
+    var inRun = {};
+    for (var i0 = 0; i0 < E.length; i0++) {
+      var e0 = E[i0];
+      if ((e0.mode !== 2 && e0.mode !== 4) || Math.abs(P[i0].y - P[i0 + 1].y) < 0.1) continue;
+      var dn = P[i0].y > P[i0 + 1].y, j0 = i0;
+      while (j0 + 1 < E.length && (E[j0 + 1].mode === 2 || E[j0 + 1].mode === 4) && Math.abs(P[j0 + 1].y - P[j0 + 2].y) >= 0.1 && (P[j0 + 1].y > P[j0 + 2].y) === dn) j0++;
+      if (j0 > i0) {
+        var H = 0; for (var k0 = i0; k0 <= j0; k0++) H += Math.hypot(P[k0 + 1].x - P[k0].x, P[k0 + 1].z - P[k0].z);
+        var dvR = Math.abs(P[i0].y - P[j0 + 1].y), extraR = dvR / STAIR_TAN - H;
+        if (extraR > 0.3) {
+          var leftR = shiftAlong(P, dn ? i0 : j0 + 1, dn ? -1 : 1, extraR);
+          if (leftR > 0.3) shiftAlong(P, dn ? j0 + 1 : i0, dn ? 1 : -1, leftR);
+        }
+        var cum = [0], tot = 0;
+        for (k0 = i0; k0 <= j0; k0++) { tot += Math.hypot(P[k0 + 1].x - P[k0].x, P[k0 + 1].z - P[k0].z); cum.push(tot); }
+        var ya = P[i0].y, yb = P[j0 + 1].y;
+        if (tot > 0.3) for (k0 = i0 + 1; k0 <= j0; k0++) P[k0].y = ya + (yb - ya) * cum[k0 - i0] / tot;
+        for (k0 = i0; k0 <= j0; k0++) inRun[k0] = true;
+      }
+      i0 = j0;
+    }
     E.forEach(function (ed, i) {
+      if (inRun[i]) return;
       if (ed.mode !== 2 && ed.mode !== 4) return;
       var a = P[i], b = P[i + 1], dv = Math.abs(a.y - b.y);
       if (dv < 0.1) return;
