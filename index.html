@@ -544,6 +544,26 @@ var Guide = (function () {
     return out;
   }
 
+  // ホームごとに、同じ島のホーム（乗車位置の点から平らな通路だけでたどれるホーム）
+  function islands(st) {
+    if (st._isl) return st._isl;
+    var adj = st.nodes.map(function () { return []; });
+    st.links.forEach(function (l) { if (l[2] === WALK) { adj[l[0]].push(l[1]); adj[l[1]].push(l[0]); } });
+    var isl = {};
+    st.plats.forEach(function (p) {
+      var seen = {}, q = [], got = {};
+      st.nodes.forEach(function (n, i) { if (n[5] === p.id) { seen[i] = true; q.push(i); } });
+      while (q.length) {
+        var a = q.pop();
+        if (st.nodes[a][5]) got[st.nodes[a][5]] = true;
+        adj[a].forEach(function (b) { if (!seen[b]) { seen[b] = true; q.push(b); } });
+      }
+      isl[p.id] = Object.keys(got);
+    });
+    Object.defineProperty(st, '_isl', { value: isl, enumerable: false });
+    return isl;
+  }
+
   function route(st, from, to, profile) {
     var N = st.nodes.length, adj = [];
     // 出入口から出入口へは、改札を通らない道だけ（改札の内側を通り抜けると運賃がかかる）
@@ -553,6 +573,13 @@ var Guide = (function () {
     // 10両目を設定したら、地下に降りて、また上がってくるおかしなルートになった」: 目的地のホーム自身を歩く所まで 2 倍に見積もっていた）
     var epPlat = function (ep) { return ep.type === 'node' ? st.nodes[ep.idx][5] : ep.type === 'plat' ? ep.id : null; };
     var fromPlat = epPlat(from), toPlat = epPlat(to);
+    // 出発・目的地と同じ島（平らな通路で直接つながるホーム）は通り抜けとみなさない（2026-10-28 利用者「新宿のミライナタワーもなおして」:
+    // ミライナタワー改札→13番線で、南のエスカレーターから 13・14番線の島へ下りる通路が 14番線の点につながるため 2 倍になり、3番線を通る回り道になっていた）
+    var mine = {};
+    if (st.op === 'jr') {
+      var isl = islands(st);
+      [fromPlat, toPlat].forEach(function (p) { if (p) (isl[p] || [p]).forEach(function (q) { mine[q] = true; }); });
+    }
     for (var i = 0; i < N; i++) adj.push([]);
     st.links.forEach(function (l, li) {
       if (noGate && (l[2] === GATE || l[2] === EXITGATE)) return;
@@ -562,7 +589,7 @@ var Guide = (function () {
       // コンコースを通る道を先に選ぶ（2026-10-27 JR新宿: 階段だけの条件でミライナタワー改札→7番線が 4番線ホームを 120 m 歩いていた）
       if (st.op === 'jr' && l[2] === WALK) {
         var pa = st.nodes[a][5], pb = st.nodes[b][5];
-        if ((pa && pa !== fromPlat && pa !== toPlat) || (pb && pb !== fromPlat && pb !== toPlat)) c *= 2;
+        if ((pa && !mine[pa]) || (pb && !mine[pb])) c *= 2;
       }
       // 歩行空間ネットワークの勾配（構内地図のある駅）。段差なしの条件では 8% を超える坂を避ける（通れなくはしない）
       var inf = st.linkInfo && st.linkInfo[li];
