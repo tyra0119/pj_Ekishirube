@@ -549,6 +549,10 @@ var Guide = (function () {
     // 出入口から出入口へは、改札を通らない道だけ（改札の内側を通り抜けると運賃がかかる）
     // （2026-10-09 利用者「出入口から出入口への案内」）
     var noGate = from.type === 'exit' && to.type === 'exit';
+    // 出発・目的地のホーム。車両を指定したときは一時的な点（type node）で来るので、その点のホームを見る（2026-10-28 利用者「JY13 メトロポリタン改札～1番線
+    // 10両目を設定したら、地下に降りて、また上がってくるおかしなルートになった」: 目的地のホーム自身を歩く所まで 2 倍に見積もっていた）
+    var epPlat = function (ep) { return ep.type === 'node' ? st.nodes[ep.idx][5] : ep.type === 'plat' ? ep.id : null; };
+    var fromPlat = epPlat(from), toPlat = epPlat(to);
     for (var i = 0; i < N; i++) adj.push([]);
     st.links.forEach(function (l, li) {
       if (noGate && (l[2] === GATE || l[2] === EXITGATE)) return;
@@ -558,7 +562,7 @@ var Guide = (function () {
       // コンコースを通る道を先に選ぶ（2026-10-27 JR新宿: 階段だけの条件でミライナタワー改札→7番線が 4番線ホームを 120 m 歩いていた）
       if (st.op === 'jr' && l[2] === WALK) {
         var pa = st.nodes[a][5], pb = st.nodes[b][5];
-        if ((pa && pa !== from.id && pa !== to.id) || (pb && pb !== from.id && pb !== to.id)) c *= 2;
+        if ((pa && pa !== fromPlat && pa !== toPlat) || (pb && pb !== fromPlat && pb !== toPlat)) c *= 2;
       }
       // 歩行空間ネットワークの勾配（構内地図のある駅）。段差なしの条件では 8% を超える坂を避ける（通れなくはしない）
       var inf = st.linkInfo && st.linkInfo[li];
